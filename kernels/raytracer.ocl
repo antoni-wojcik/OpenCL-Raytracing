@@ -1,0 +1,332 @@
+#define MIN_DISTANCE 0.001f
+#define MAX_DISTANCE 1000.0f
+#define DEPTH 20
+#define NUM_SPHERES 3
+#define NUM_PLANES 1
+#define NUM_LENSES 1
+
+typedef float3 vec3;
+typedef float3 col;
+
+__constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
+
+typedef struct {
+    vec3 start; //starting location
+    vec3 dir; //has to be normalized
+    float param; //has to be set to 0 when initalized
+} Ray;
+
+typedef enum { t_refractive, t_reflective, t_dielectric, t_diffuse } MatType;
+
+typedef struct {
+    MatType type;
+    col color;
+    float extra_data; // refractive index etc
+} Material;
+
+typedef struct {
+    float t;
+    vec3 p;
+    vec3 normal;
+    Material* mat;
+} HPI; //HitPointInfo
+
+typedef struct {
+    vec3 pos;
+    float r;
+    Material* mat;
+} Sphere;
+
+typedef struct {
+    vec3 pos;
+    vec3 normal;
+    Material* mat;
+} Plane;
+
+typedef struct {
+    vec3 pos; // pos of the centre
+    vec3 p1; // both curvatures
+    vec3 p2;
+    float r1;
+    float r2;
+    Material* mat;
+} Lens;
+
+inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, const Material* mat) {
+    //if(r1 < h && r2 < h) abort();
+    Lens lens;
+    lens.pos = pos;
+    lens.p1 = pos + normal * sqrt(r1 * r1 - h * h);;
+    lens.p2 = pos - normal * sqrt(r2 * r2 - h * h);;
+    lens.r1 = r1;
+    lens.r2 = r2;
+    lens.mat = mat;
+    
+    return lens;
+}
+
+typedef struct {
+    Sphere spheres[NUM_SPHERES];
+    Plane planes[NUM_PLANES];
+    Lens lenses[NUM_LENSES];
+} Scene;
+
+inline vec3 getVec(global const float* buff, int id) {
+    return (vec3)(buff[id], buff[id + 1], buff[id + 2]);
+}
+
+inline bool inRayRange(float x) { return (x - MAX_DISTANCE) * (x - MIN_DISTANCE) <= 0; }
+
+Ray genInitRay(global const float* camera_buffer, const vec3* start, float s, float t) {
+    Ray r;
+    
+    vec3 camera_llc = getVec(camera_buffer, 3);
+    vec3 horizontal = getVec(camera_buffer, 6);
+    vec3 vertical = getVec(camera_buffer, 9);
+    
+    r.start = *start;
+    r.dir = normalize(camera_llc + s * horizontal + t * vertical);
+    return r;
+}
+
+vec3 rayPointAtParam(const Ray* r, float t) {
+    return r->start + r->dir * t;
+}
+
+bool hitSphere(const Ray* r, const Sphere* s, HPI* hpi) {
+    vec3 oc = s->pos - r->start;
+    float b = dot(oc, r->dir);
+    float c = dot(oc, oc) - s->r * s->r;
+    float dis = b * b - c; //discriminant
+    if (dis > 0) {
+        float d = sqrt(dis);
+        float temp = b - d;
+        if(inRayRange(temp)) {
+            hpi->t = temp;
+            hpi->p = rayPointAtParam(r, temp);
+            hpi->normal = (hpi->p - s->pos) / s->r; // FIXME: ?? NORMALIZE
+            hpi->mat = s->mat;
+            return true;
+        }
+        temp = b + d;
+        if(inRayRange(temp)) {
+            hpi->t = temp;
+            hpi->p = rayPointAtParam(r, temp);
+            hpi->normal = (hpi->p - s->pos) / s->r; // FIXME: ?? NORMALIZE
+            hpi->mat = s->mat;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hitPlane(const Ray* r, const Plane* p, HPI* hpi) {
+    float a = dot(r->dir, p->normal);
+    
+    //TODO: if hpi->mat.type == refractive use one-sided normal, otherwise double-sided
+    
+    float b = dot(p->pos - r->start, p->normal);
+    float temp = b / a;
+    
+    if(inRayRange(temp)) {
+        hpi->t = temp;
+        hpi->p = rayPointAtParam(r, temp);
+        hpi->normal = -p->normal * sign(a); //!!!!!!
+        hpi->mat = p->mat;
+        
+        return true;
+    }
+    
+    return false;
+}
+
+bool hitLens(const Ray* r, const Lens* lens, HPI* hpi) {
+    vec3 oc = lens->p1 - r->start;
+    float b1 = dot(oc, r->dir);
+    float c = dot(oc, oc) - lens->r1 * lens->r1;
+    float dis1 = b1 * b1 - c;
+    
+    oc = lens->p2 - r->start;
+    float b2 = dot(oc, r->dir);
+    c = dot(oc, oc) - lens->r2 * lens->r2;
+    float dis2 = b2 * b2 - c;
+    
+    if(dis1 > 0 && dis2 > 0) {
+        float d1 = sqrt(dis1);
+        float d2 = sqrt(dis2);
+        
+        float t1A = b1 - d1; // first intersection of the sphere 1
+        float t1B = b1 + d1; // second intersection of the sphere 1
+        float t2A = b2 - d2; // first intersection of the sphere 2
+        float t2B = b2 + d2; // second intersection of the sphere 2
+
+        const vec3* s;
+        float rad;
+        float temp;
+        
+        if((t1B < t2A) || (t2B < t1A)) return false; // missing the lens
+        else if(MIN_DISTANCE <= t1A || MIN_DISTANCE <= t2A) {
+            // outside the lens
+            if(t2A <= t1A) {
+                s = &(lens->p1);
+                rad = lens->r1;
+                temp = t1A;
+            } else {
+                s = &(lens->p2);
+                rad = lens->r2;
+                temp = t2A;
+            }
+        } else if(MIN_DISTANCE <= t1B && MIN_DISTANCE <= t2B) {
+            // inside the lens
+            if(t1B <= t2B) { // TODO: FOR SOME REASON NO BANDS IF >= IS TAKEN
+                s = &(lens->p1);
+                rad = lens->r1;
+                temp = t1B;
+            } else {
+                s = &(lens->p2);
+                rad = lens->r2;
+                temp = t2B;
+            }
+        } else return false; // outside the lens facing an opposite dir
+            
+        if(temp <= MAX_DISTANCE) {
+            hpi->t = temp;
+            hpi->p = rayPointAtParam(r, temp);
+            hpi->normal = (hpi->p - *s) / rad; // FIXME: ?? NORMALIZE
+            hpi->mat = lens->mat;
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+
+bool hitScene(const Ray* r, const Scene* scene, HPI* hpi) {
+    bool hit_any = false;
+    float hit_min = MAX_DISTANCE;
+    HPI hpi_result;
+    
+    for(int i = 0; i < NUM_SPHERES; i++) {
+        if(hitSphere(r, scene->spheres + i, &hpi_result) && hpi_result.t < hit_min) {
+            hit_any = true;
+            *hpi = hpi_result;
+            hit_min = hpi_result.t;
+        }
+    }
+    
+    for(int i = 0; i < NUM_PLANES; i++) {
+        if(hitPlane(r, scene->planes + i, &hpi_result) && hpi_result.t < hit_min) {
+            hit_any = true;
+            *hpi = hpi_result;
+            hit_min = hpi_result.t;
+        }
+    }
+    
+    for(int i = 0; i < NUM_LENSES; i++) {
+        if(hitLens(r, scene->lenses + i, &hpi_result) && hpi_result.t < hit_min) {
+            hit_any = true;
+            *hpi = hpi_result;
+            hit_min = hpi_result.t;
+        }
+    }
+    
+    return hit_any;
+}
+
+void rayReflect(Ray* r, col* c, const HPI* hpi) {
+    r->start = hpi->p;
+    float x = dot(r->dir, hpi->normal);
+    //if(x > 0) x = -x;
+    r->dir = normalize(r->dir - 2.0f * x * hpi->normal);
+    
+    if(hpi->mat->type == t_reflective) (*c) *= hpi->mat->extra_data;
+}
+
+void rayRefract(Ray* r, col* c, HPI* hpi) {
+    vec3 normal;
+    float idx_ratio;
+    float cai = dot(r->dir, hpi->normal); //cos_angle_incident
+    if(cai > 0) {
+        normal = -hpi->normal;
+        idx_ratio = hpi->mat->extra_data;
+        cai = -cai;
+    } else {
+        normal = hpi->normal;
+        idx_ratio = 1.0f / hpi->mat->extra_data;
+    }
+
+    float discriminant = 1.0f - idx_ratio * idx_ratio * (1.0f - cai * cai);
+    
+    if(discriminant > 0.0f) {
+        r->start = hpi->p;
+        r->dir = idx_ratio * r->dir - normal * (idx_ratio * cai + sqrt(discriminant));
+    } else {
+        hpi->normal = normal;
+        rayReflect(r, c, hpi);
+    }
+}
+
+inline col bkgCol(const Ray *r) {
+    float y = -r->dir.y * 0.25f + 0.6f;
+    return (col)(y * 0.6f + 0.1f, y, 1.0f);
+}
+
+col getCol(Ray* r, const Scene* scene) {
+    col out = (col)(1.0f);
+    
+    for(int i = 0; i < DEPTH; i++) {
+        HPI hpi;
+        bool hit = hitScene(r, scene, &hpi);//hitSpheres(r, scene.spheres, &hpi);
+        if(!hit) {
+            out = min(out, bkgCol(r));
+            break;
+        } else {
+            switch(hpi.mat->type) {
+                case t_reflective:
+                    rayReflect(r, &out, &hpi);
+                    break;
+                case t_refractive:
+                    rayRefract(r, &out, &hpi);
+                    break;
+                case t_dielectric:
+                    //TODO: DIELECTRIC
+                    break;
+                case t_diffuse:
+                    //TODO: DIFFUSE
+                    break;
+            }
+            
+            out = min(out, hpi.mat->color); // mix colors
+        }
+    }
+    
+    return out;
+}
+
+__kernel void trace(__write_only image2d_t image, global const float* camera_buffer, float time) {
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    
+    float s = (float)x / (float)get_image_width(image);
+    float t = (float)y / (float)get_image_height(image);
+    
+    vec3 camera_pos = getVec(camera_buffer, 0);
+    
+    //setup the scene
+    
+    Material m_reflective = (Material){t_reflective, (col)(1.0f), 0.95f};
+    Material m_refractive1 = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
+    Material m_refractive2 = (Material){t_refractive, (col)(1.0f), 2.0f};
+    
+    Scene scene;
+    scene.spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, &m_reflective};
+    scene.spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, &m_reflective};
+    scene.spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, &m_refractive1};
+    scene.planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), &m_reflective};
+    scene.lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, &m_refractive2);
+    
+    Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
+    
+    write_imagef(image, (int2)(x, y), (float4)(getCol(&r_main, &scene), 1.0f));
+}
