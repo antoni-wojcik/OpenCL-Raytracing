@@ -9,8 +9,10 @@
 #include "raytracer.h"
 
 #include <vector>
+#include <iostream>
 
-#define KERNEL_NAME "trace"
+#define TRACE_KERNEL_NAME "trace"
+#define SCENE_KERNEL_NAME "createScene"
 
 RayTracer::RayTracer(int w, int h, const char* kernel_path) : KernelGL(kernel_path), width(w), height(h) {
     try {
@@ -56,19 +58,23 @@ void RayTracer::createGLBuffers() {
 void RayTracer::createCLBuffers() {
     buff_size = 12 * sizeof(cl_float);
     camera_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, buff_size);
+    scene_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_mem));
 }
 
 void RayTracer::createKernels() {
-    kernel = cl::Kernel(program, KERNEL_NAME);
+    trace_kernel = cl::Kernel(program, TRACE_KERNEL_NAME);
+    scene_kernel = cl::Kernel(program, SCENE_KERNEL_NAME);
 }
 
 void RayTracer::setKernelArgs() {
-    kernel.setArg(0, image);
-    kernel.setArg(1, camera_buffer);
+    trace_kernel.setArg(0, image);
+    trace_kernel.setArg(1, camera_buffer);
+    trace_kernel.setArg(2, scene_buffer);
+    scene_kernel.setArg(0, scene_buffer);
 }
 
 void RayTracer::setTime(float time) {
-    kernel.setArg(2, time);
+    scene_kernel.setArg(1, time);
 }
 
 void RayTracer::render(const Camera* camera) {
@@ -79,8 +85,9 @@ void RayTracer::render(const Camera* camera) {
         cl::CommandQueue queue(context, device);
         
         queue.enqueueAcquireGLObjects(&mem_objs);
+        queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
         queue.enqueueWriteBuffer(camera_buffer, CL_TRUE, 0, buff_size, camera->transferData());
-        queue.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);
+        queue.enqueueNDRangeKernel(trace_kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);
         queue.enqueueReleaseGLObjects(&mem_objs);
         queue.enqueueBarrierWithWaitList();
         queue.finish();

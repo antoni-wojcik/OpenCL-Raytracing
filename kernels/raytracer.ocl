@@ -1,6 +1,7 @@
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
 #define DEPTH 20
+#define NUM_MATERIALS 3
 #define NUM_SPHERES 3
 #define NUM_PLANES 1
 #define NUM_LENSES 1
@@ -28,19 +29,19 @@ typedef struct {
     float t;
     vec3 p;
     vec3 normal;
-    Material* mat;
+    __global Material* mat;
 } HPI; //HitPointInfo
 
 typedef struct {
     vec3 pos;
     float r;
-    Material* mat;
+    __global Material* mat;
 } Sphere;
 
 typedef struct {
     vec3 pos;
     vec3 normal;
-    Material* mat;
+    __global Material* mat;
 } Plane;
 
 typedef struct {
@@ -49,10 +50,10 @@ typedef struct {
     vec3 p2;
     float r1;
     float r2;
-    Material* mat;
+    __global Material* mat;
 } Lens;
 
-inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, const Material* mat) {
+inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __global Material* mat) {
     //if(r1 < h && r2 < h) abort();
     Lens lens;
     lens.pos = pos;
@@ -66,18 +67,20 @@ inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, const
 }
 
 typedef struct {
+    Material materials[NUM_MATERIALS];
+    
     Sphere spheres[NUM_SPHERES];
     Plane planes[NUM_PLANES];
     Lens lenses[NUM_LENSES];
 } Scene;
 
-inline vec3 getVec(global const float* buff, int id) {
+inline vec3 getVec(__global const float* buff, int id) {
     return (vec3)(buff[id], buff[id + 1], buff[id + 2]);
 }
 
 inline bool inRayRange(float x) { return (x - MAX_DISTANCE) * (x - MIN_DISTANCE) <= 0; }
 
-Ray genInitRay(global const float* camera_buffer, const vec3* start, float s, float t) {
+Ray genInitRay(__global const float* camera_buffer, const vec3* start, float s, float t) {
     Ray r;
     
     vec3 camera_llc = getVec(camera_buffer, 3);
@@ -93,7 +96,7 @@ vec3 rayPointAtParam(const Ray* r, float t) {
     return r->start + r->dir * t;
 }
 
-bool hitSphere(const Ray* r, const Sphere* s, HPI* hpi) {
+bool hitSphere(const Ray* r, __global const Sphere* s, HPI* hpi) {
     vec3 oc = s->pos - r->start;
     float b = dot(oc, r->dir);
     float c = dot(oc, oc) - s->r * s->r;
@@ -120,7 +123,7 @@ bool hitSphere(const Ray* r, const Sphere* s, HPI* hpi) {
     return false;
 }
 
-bool hitPlane(const Ray* r, const Plane* p, HPI* hpi) {
+bool hitPlane(const Ray* r, __global const Plane* p, HPI* hpi) {
     float a = dot(r->dir, p->normal);
     
     //TODO: if hpi->mat.type == refractive use one-sided normal, otherwise double-sided
@@ -140,7 +143,7 @@ bool hitPlane(const Ray* r, const Plane* p, HPI* hpi) {
     return false;
 }
 
-bool hitLens(const Ray* r, const Lens* lens, HPI* hpi) {
+bool hitLens(const Ray* r, __global const Lens* lens, HPI* hpi) {
     vec3 oc = lens->p1 - r->start;
     float b1 = dot(oc, r->dir);
     float c = dot(oc, oc) - lens->r1 * lens->r1;
@@ -160,7 +163,7 @@ bool hitLens(const Ray* r, const Lens* lens, HPI* hpi) {
         float t2A = b2 - d2; // first intersection of the sphere 2
         float t2B = b2 + d2; // second intersection of the sphere 2
 
-        const vec3* s;
+        __global const vec3* s;
         float rad;
         float temp;
         
@@ -202,7 +205,7 @@ bool hitLens(const Ray* r, const Lens* lens, HPI* hpi) {
 }
 
 
-bool hitScene(const Ray* r, const Scene* scene, HPI* hpi) {
+bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
     bool hit_any = false;
     float hit_min = MAX_DISTANCE;
     HPI hpi_result;
@@ -236,9 +239,7 @@ bool hitScene(const Ray* r, const Scene* scene, HPI* hpi) {
 
 void rayReflect(Ray* r, col* c, const HPI* hpi) {
     r->start = hpi->p;
-    float x = dot(r->dir, hpi->normal);
-    //if(x > 0) x = -x;
-    r->dir = normalize(r->dir - 2.0f * x * hpi->normal);
+    r->dir = normalize(r->dir - 2.0f * dot(r->dir, hpi->normal) * hpi->normal);
     
     if(hpi->mat->type == t_reflective) (*c) *= hpi->mat->extra_data;
 }
@@ -272,7 +273,7 @@ inline col bkgCol(const Ray *r) {
     return (col)(y * 0.6f + 0.1f, y, 1.0f);
 }
 
-col getCol(Ray* r, const Scene* scene) {
+col getCol(Ray* r, __global const Scene* scene) {
     col out = (col)(1.0f);
     
     for(int i = 0; i < DEPTH; i++) {
@@ -304,7 +305,7 @@ col getCol(Ray* r, const Scene* scene) {
     return out;
 }
 
-__kernel void trace(__write_only image2d_t image, global const float* camera_buffer, float time) {
+__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const Scene* scene) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     
@@ -313,20 +314,23 @@ __kernel void trace(__write_only image2d_t image, global const float* camera_buf
     
     vec3 camera_pos = getVec(camera_buffer, 0);
     
-    //setup the scene
-    
-    Material m_reflective = (Material){t_reflective, (col)(1.0f), 0.95f};
-    Material m_refractive1 = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
-    Material m_refractive2 = (Material){t_refractive, (col)(1.0f), 2.0f};
-    
-    Scene scene;
-    scene.spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, &m_reflective};
-    scene.spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, &m_reflective};
-    scene.spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, &m_refractive1};
-    scene.planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), &m_reflective};
-    scene.lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, &m_refractive2);
-    
     Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
     
-    write_imagef(image, (int2)(x, y), (float4)(getCol(&r_main, &scene), 1.0f));
+    write_imagef(image, (int2)(x, y), (float4)(getCol(&r_main, scene), 1.0f));
+}
+
+inline __global Material* getMaterial(__global Scene* scene, int id) {
+    return scene->materials + id;
+}
+
+__kernel void createScene(__global Scene* scene, float time) {
+    scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.95f};
+    scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
+    scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
+    
+    scene->spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, getMaterial(scene, 0)};
+    scene->spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, getMaterial(scene, 0)};
+    scene->spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, getMaterial(scene, 1)};
+    scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 0)};
+    scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
 }
