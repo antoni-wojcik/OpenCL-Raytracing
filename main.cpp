@@ -7,6 +7,7 @@
 //
 
 #define RETINA
+
 #define SCR_WIDTH 1200
 #define SCR_HEIGHT 800
 
@@ -62,7 +63,7 @@ int main(int argc, const char * argv[]) {
     
     camera = new Camera(60.0f, (float)scr_width / (float)scr_height, glm::vec3(0.0f), 0, 0);
     screen = new Screen("shaders/screen.vs", "shaders/screen.fs");
-    RayTracer* ray_tracer = new RayTracer(scr_width, scr_height, "kernels/raytracer.ocl");
+    RayTracer* ray_tracer = new RayTracer(SCR_WIDTH, SCR_HEIGHT, "kernels/raytracer.ocl"); // FIXME: change to scr_width, scr_height to get the full resolution
     
     //KernelGL* kernel = new Cloth(500, 500, 0.01f, 1.0f, 500.0f, 0.2f, glm::vec3(0.0f), 0.03f, "src/shaders/cloth.vs", "src/shaders/cloth.gs", "src/shaders/cloth.fs", "src/kernels/kernel_cloth.ocl");
     glEnable(GL_DEPTH_TEST);

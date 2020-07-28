@@ -19,9 +19,9 @@ private:
     
     cl_GLuint texture_ID;
     
-    cl::Kernel trace_kernel, scene_kernel;
+    cl::Kernel trace_kernel, scene_kernel;//, count_kernel, start_kernel;
     cl::ImageGL image;
-    cl::Buffer scene_buffer, camera_buffer;
+    cl::Buffer scene_buffer, random_buffer, camera_buffer;//, count_buffer;
     size_t image_size, buff_size;
     
     void createGLTextures();

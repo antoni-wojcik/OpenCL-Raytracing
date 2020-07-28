@@ -1,10 +1,13 @@
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
-#define DEPTH 20
-#define NUM_MATERIALS 3
-#define NUM_SPHERES 3
+#define DEPTH 10
+#define NUM_MATERIALS 5
+#define NUM_SPHERES 6
 #define NUM_PLANES 1
 #define NUM_LENSES 1
+
+#define RANDOM_BUFFER_SIZE 100000
+#define SAMPLES 1
 
 typedef float3 vec3;
 typedef float3 col;
@@ -12,7 +15,7 @@ typedef float3 col;
 __constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
 
 typedef struct {
-    vec3 start; //starting location
+    vec3 origin; //starting location
     vec3 dir; //has to be normalized
     float param; //has to be set to 0 when initalized
 } Ray;
@@ -80,24 +83,24 @@ inline vec3 getVec(__global const float* buff, int id) {
 
 inline bool inRayRange(float x) { return (x - MAX_DISTANCE) * (x - MIN_DISTANCE) <= 0; }
 
-Ray genInitRay(__global const float* camera_buffer, const vec3* start, float s, float t) {
+Ray genInitRay(__global const float* camera_buffer, const vec3* origin, float s, float t) {
     Ray r;
     
     vec3 camera_llc = getVec(camera_buffer, 3);
     vec3 horizontal = getVec(camera_buffer, 6);
     vec3 vertical = getVec(camera_buffer, 9);
     
-    r.start = *start;
+    r.origin = *origin;
     r.dir = normalize(camera_llc + s * horizontal + t * vertical);
     return r;
 }
 
 vec3 rayPointAtParam(const Ray* r, float t) {
-    return r->start + r->dir * t;
+    return r->origin + r->dir * t;
 }
 
 bool hitSphere(const Ray* r, __global const Sphere* s, HPI* hpi) {
-    vec3 oc = s->pos - r->start;
+    vec3 oc = s->pos - r->origin;
     float b = dot(oc, r->dir);
     float c = dot(oc, oc) - s->r * s->r;
     float dis = b * b - c; //discriminant
@@ -128,7 +131,7 @@ bool hitPlane(const Ray* r, __global const Plane* p, HPI* hpi) {
     
     //TODO: if hpi->mat.type == refractive use one-sided normal, otherwise double-sided
     
-    float b = dot(p->pos - r->start, p->normal);
+    float b = dot(p->pos - r->origin, p->normal);
     float temp = b / a;
     
     if(inRayRange(temp)) {
@@ -144,12 +147,12 @@ bool hitPlane(const Ray* r, __global const Plane* p, HPI* hpi) {
 }
 
 bool hitLens(const Ray* r, __global const Lens* lens, HPI* hpi) {
-    vec3 oc = lens->p1 - r->start;
+    vec3 oc = lens->p1 - r->origin;
     float b1 = dot(oc, r->dir);
     float c = dot(oc, oc) - lens->r1 * lens->r1;
     float dis1 = b1 * b1 - c;
     
-    oc = lens->p2 - r->start;
+    oc = lens->p2 - r->origin;
     float b2 = dot(oc, r->dir);
     c = dot(oc, oc) - lens->r2 * lens->r2;
     float dis2 = b2 * b2 - c;
@@ -238,7 +241,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
 }
 
 void rayReflect(Ray* r, col* c, const HPI* hpi) {
-    r->start = hpi->p;
+    r->origin = hpi->p;
     r->dir = normalize(r->dir - 2.0f * dot(r->dir, hpi->normal) * hpi->normal);
     
     if(hpi->mat->type == t_reflective) (*c) *= hpi->mat->extra_data;
@@ -260,7 +263,7 @@ void rayRefract(Ray* r, col* c, HPI* hpi) {
     float discriminant = 1.0f - idx_ratio * idx_ratio * (1.0f - cai * cai);
     
     if(discriminant > 0.0f) {
-        r->start = hpi->p;
+        r->origin = hpi->p;
         r->dir = idx_ratio * r->dir - normal * (idx_ratio * cai + sqrt(discriminant));
     } else {
         hpi->normal = normal;
@@ -268,17 +271,30 @@ void rayRefract(Ray* r, col* c, HPI* hpi) {
     }
 }
 
+inline int getRandomSeed(vec3 v_seed, int s_seed) {
+    int rand_val = (int)(dot(v_seed, (vec3)(123.9898, 758.233, 433.3314)) * 4378.5453);
+    return ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1)) * 3) % RANDOM_BUFFER_SIZE;
+}
+
+void rayScatter(Ray* r, col* c, const HPI* hpi, __global const float* random_buffer, int s_seed) {
+    vec3 random_in_sphere = getVec(random_buffer, getRandomSeed(r->dir, s_seed));
+    r->dir = normalize(hpi->normal + random_in_sphere);
+    r->origin = hpi->p;
+    
+    (*c) *= hpi->mat->extra_data;
+}
+
 inline col bkgCol(const Ray *r) {
     float y = -r->dir.y * 0.25f + 0.6f;
     return (col)(y * 0.6f + 0.1f, y, 1.0f);
 }
 
-col getCol(Ray* r, __global const Scene* scene) {
+col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, int sample) {
     col out = (col)(1.0f);
     
     for(int i = 0; i < DEPTH; i++) {
         HPI hpi;
-        bool hit = hitScene(r, scene, &hpi);//hitSpheres(r, scene.spheres, &hpi);
+        bool hit = hitScene(r, scene, &hpi);
         if(!hit) {
             out = min(out, bkgCol(r));
             break;
@@ -294,7 +310,7 @@ col getCol(Ray* r, __global const Scene* scene) {
                     //TODO: DIELECTRIC
                     break;
                 case t_diffuse:
-                    //TODO: DIFFUSE
+                    rayScatter(r, &out, &hpi, random_buffer, i + sample);
                     break;
             }
             
@@ -305,7 +321,7 @@ col getCol(Ray* r, __global const Scene* scene) {
     return out;
 }
 
-__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const Scene* scene) {
+__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     
@@ -316,8 +332,19 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     
     Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
     
-    write_imagef(image, (int2)(x, y), (float4)(getCol(&r_main, scene), 1.0f));
+    col out = (col)(0.0f);
+    
+    for(int i = 0; i < SAMPLES; i++) {
+        Ray r = r_main;
+        
+        out += getCol(&r, random_buffer, scene, i);
+    }
+    
+    out /= (float)SAMPLES;
+    
+    write_imagef(image, (int2)(x, y), (float4)(out, 1.0f));
 }
+
 
 inline __global Material* getMaterial(__global Scene* scene, int id) {
     return scene->materials + id;
@@ -327,10 +354,15 @@ __kernel void createScene(__global Scene* scene, float time) {
     scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.95f};
     scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
     scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
+    scene->materials[3] = (Material){t_diffuse, (col)(1.0f, 0.0f, 0.0f), 0.5f};
+    scene->materials[4] = (Material){t_diffuse, (col)(0.0f, 1.0f, 0.0f), 0.5f};
     
     scene->spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, getMaterial(scene, 0)};
     scene->spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, getMaterial(scene, 0)};
     scene->spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, getMaterial(scene, 1)};
+    scene->spheres[3] = (Sphere){(vec3)(-0.02f - sin(time), -3.0f, 0.0f), 1.0f, getMaterial(scene, 3)};
+    scene->spheres[4] = (Sphere){(vec3)(2.02f + sin(time), -3.0f, 0.0f), 1.0f, getMaterial(scene, 4)};
+    scene->spheres[5] = (Sphere){(vec3)(1.0f, -4.9f, 0.0f), 1.1f, getMaterial(scene, 0)};
     scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 0)};
     scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
 }
