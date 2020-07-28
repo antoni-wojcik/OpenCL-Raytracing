@@ -1,13 +1,12 @@
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
 #define DEPTH 10
-#define NUM_MATERIALS 5
-#define NUM_SPHERES 6
+#define NUM_MATERIALS 6
+#define NUM_SPHERES 7
 #define NUM_PLANES 1
 #define NUM_LENSES 1
 
 #define RANDOM_BUFFER_SIZE 100000
-#define SAMPLES 1
 
 typedef float3 vec3;
 typedef float3 col;
@@ -79,6 +78,20 @@ typedef struct {
 
 inline vec3 getVec(__global const float* buff, int id) {
     return (vec3)(buff[id], buff[id + 1], buff[id + 2]);
+}
+
+inline vec3 randomVec(__global const float* random_buffer, const Ray* r, int s_seed) {
+    int rand_val = (int)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
+    int seed = ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1)) * 3) % RANDOM_BUFFER_SIZE;
+    
+    return getVec(random_buffer, seed);
+}
+
+inline float random(__global const float* random_buffer, const Ray* r, int s_seed) {
+    int rand_val = (int)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
+    int seed = RANDOM_BUFFER_SIZE * 3 + ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1))) % RANDOM_BUFFER_SIZE;
+    
+    return random_buffer[seed];
 }
 
 inline bool inRayRange(float x) { return (x - MAX_DISTANCE) * (x - MIN_DISTANCE) <= 0; }
@@ -271,17 +284,48 @@ void rayRefract(Ray* r, col* c, HPI* hpi) {
     }
 }
 
-inline int getRandomSeed(vec3 v_seed, int s_seed) {
-    int rand_val = (int)(dot(v_seed, (vec3)(123.9898, 758.233, 433.3314)) * 4378.5453);
-    return ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1)) * 3) % RANDOM_BUFFER_SIZE;
-}
-
 void rayScatter(Ray* r, col* c, const HPI* hpi, __global const float* random_buffer, int s_seed) {
-    vec3 random_in_sphere = getVec(random_buffer, getRandomSeed(r->dir, s_seed));
+    vec3 random_in_sphere = randomVec(random_buffer, r, s_seed);
     r->dir = normalize(hpi->normal + random_in_sphere);
     r->origin = hpi->p;
     
     (*c) *= hpi->mat->extra_data;
+}
+
+float schlick(float cai, float idx_ratio) {
+    float r0 = (1.0f - idx_ratio) / (1.0f + idx_ratio);
+    r0 *= r0;
+    return r0 + (1.0f - r0) * pow((1.0f - cai), 5);
+}
+
+void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random_buffer, int s_seed) {
+    vec3 normal;
+    float idx_ratio;
+    float cai = dot(r->dir, hpi->normal); //cos_angle_incident
+    if(cai > 0) {
+        normal = -hpi->normal;
+        idx_ratio = hpi->mat->extra_data;
+        cai = -cai;
+    } else {
+        normal = hpi->normal;
+        idx_ratio = 1.0f / hpi->mat->extra_data;
+    }
+    
+    float reflect_prob = schlick(-cai, idx_ratio);
+    float rand = random(random_buffer, r, s_seed);
+    
+    if(reflect_prob < rand) {
+        float discriminant = 1.0f - idx_ratio * idx_ratio * (1.0f - cai * cai);
+        
+        if(discriminant > 0.0f) {
+            r->origin = hpi->p;
+            r->dir = idx_ratio * r->dir - normal * (idx_ratio * cai + sqrt(discriminant));
+            return;
+        }
+    }
+    
+    hpi->normal = normal;
+    rayReflect(r, c, hpi);
 }
 
 inline col bkgCol(const Ray *r) {
@@ -307,7 +351,7 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
                     rayRefract(r, &out, &hpi);
                     break;
                 case t_dielectric:
-                    //TODO: DIELECTRIC
+                    rayRefractDielectric(r, &out, &hpi, random_buffer, i + sample);
                     break;
                 case t_diffuse:
                     rayScatter(r, &out, &hpi, random_buffer, i + sample);
@@ -332,17 +376,30 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     
     Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
     
-    col out = (col)(0.0f);
-    
-    for(int i = 0; i < SAMPLES; i++) {
-        Ray r = r_main;
-        
-        out += getCol(&r, random_buffer, scene, i);
-    }
-    
-    out /= (float)SAMPLES;
+    col out = getCol(&r_main, random_buffer, scene, 0);
     
     write_imagef(image, (int2)(x, y), (float4)(out, 1.0f));
+}
+
+__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, const int sample) {
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    int2 loc = (int2)(x, y);
+    
+    float s = (float)x / (float)get_image_width(image_in);
+    float t = (float)y / (float)get_image_height(image_in);
+    
+    vec3 camera_pos = getVec(camera_buffer, 0);
+    
+    Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
+    
+    col old_col = read_imagef(image_in, sampler, loc).xyz;
+    
+    float mixing_param = (float)(sample)/(float)(sample + 1);
+    
+    col out = mix(getCol(&r_main, random_buffer, scene, sample), old_col, mixing_param);
+    
+    write_imagef(image_out, loc, (float4)(out, 1.0f));
 }
 
 
@@ -356,13 +413,15 @@ __kernel void createScene(__global Scene* scene, float time) {
     scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
     scene->materials[3] = (Material){t_diffuse, (col)(1.0f, 0.0f, 0.0f), 0.5f};
     scene->materials[4] = (Material){t_diffuse, (col)(0.0f, 1.0f, 0.0f), 0.5f};
+    scene->materials[5] = (Material){t_dielectric, (col)(1.0f), 1.3f};
     
     scene->spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, getMaterial(scene, 0)};
     scene->spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, getMaterial(scene, 0)};
     scene->spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, getMaterial(scene, 1)};
-    scene->spheres[3] = (Sphere){(vec3)(-0.02f - sin(time), -3.0f, 0.0f), 1.0f, getMaterial(scene, 3)};
-    scene->spheres[4] = (Sphere){(vec3)(2.02f + sin(time), -3.0f, 0.0f), 1.0f, getMaterial(scene, 4)};
+    scene->spheres[3] = (Sphere){(vec3)(-0.02f, -3.0f, 0.0f), 1.0f, getMaterial(scene, 3)};
+    scene->spheres[4] = (Sphere){(vec3)(2.02f, -3.0f, 0.0f), 1.0f, getMaterial(scene, 4)};
     scene->spheres[5] = (Sphere){(vec3)(1.0f, -4.9f, 0.0f), 1.1f, getMaterial(scene, 0)};
+    scene->spheres[6] = (Sphere){(vec3)(-3.0f, 0.0f, 0.0f), 1.0f, getMaterial(scene, 5)};
     scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 0)};
     scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
 }

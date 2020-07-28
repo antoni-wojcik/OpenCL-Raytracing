@@ -50,6 +50,7 @@ unsigned int scr_height = SCR_HEIGHT;
 
 // variables used in the main loop
 bool run = true;
+bool camera_in_motion = true;
 
 // variables used in callbacks
 bool mouse_hidden = true;
@@ -90,7 +91,13 @@ int main(int argc, const char * argv[]) {
                 int steps = (int)(lag / MIN_FRAME_TIME);
                 lag -= steps * MIN_FRAME_TIME;
                 if(steps > MAX_FRAME_COUNT) steps = MAX_FRAME_COUNT;
-                ray_tracer->render(camera);
+                
+                if(camera_in_motion) {
+                    ray_tracer->render(camera);
+                    
+                    camera_in_motion = false;
+                } else ray_tracer->renderAgain(camera);
+                
                 //scene->iterate(steps); TODO
             }
         } else {
@@ -124,10 +131,22 @@ void processInput(GLFWwindow* window, float delta_time) {
     if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
     
     if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
-    if(glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera->move(FORWARD, delta_time);
-    if(glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera->move(BACK, delta_time);
-    if(glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera->move(LEFT, delta_time);
-    if(glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera->move(RIGHT, delta_time);
+    if(glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+        camera->move(FORWARD, delta_time);
+        camera_in_motion = true;
+    }
+    if(glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+        camera->move(BACK, delta_time);
+        camera_in_motion = true;
+    }
+    if(glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+        camera->move(LEFT, delta_time);
+        camera_in_motion = true;
+    }
+    if(glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        camera->move(RIGHT, delta_time);
+        camera_in_motion = true;
+    }
     
     if(glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera->setFasterSpeed(true);
     else if(glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_RELEASE) camera->setFasterSpeed(false);
@@ -168,11 +187,15 @@ void mouseCallback(GLFWwindow* window, double pos_x, double pos_y) {
     mouse_last_x = pos_x;
     mouse_last_y = pos_y;
     
-    if(mouse_hidden) camera->rotate(offset_x, -offset_y);
+    if(mouse_hidden) {
+        camera->rotate(offset_x, -offset_y);
+        camera_in_motion = true;
+    }
 }
 
 void scrollCallback(GLFWwindow* window, double offset_x, double offset_y) {
     camera->zoom(offset_y);
+    camera_in_motion = true;
 }
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {

@@ -14,6 +14,7 @@
 #include <cmath>
 
 #define TRACE_KERNEL_NAME "trace"
+#define RETRACE_KERNEL_NAME "retrace"
 #define SCENE_KERNEL_NAME "createScene"
 #define RANDOM_BUFFER_SIZE 100000
 
@@ -52,7 +53,7 @@ void RayTracer::createGLTextures() {
 
 void RayTracer::createGLBuffers() {
     //cl::ImageFormat image_format(CL_RGBA, CL_FLOAT);
-    image = cl::ImageGL(context, CL_MEM_WRITE_ONLY, GL_TEXTURE_2D, 0, texture_ID);
+    image = cl::ImageGL(context, CL_MEM_READ_WRITE, GL_TEXTURE_2D, 0, texture_ID);
 }
 
 void RayTracer::createCLBuffers() {
@@ -62,11 +63,11 @@ void RayTracer::createCLBuffers() {
     
     // create the buffer of random vectors in an unit sphere
     
-    size_t random_buffer_size = RANDOM_BUFFER_SIZE * 3 * sizeof(cl_float);
+    size_t random_buffer_size = RANDOM_BUFFER_SIZE * 4 * sizeof(cl_float);
     
     random_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, random_buffer_size);
     
-    float* random_vectors = new float[RANDOM_BUFFER_SIZE * 3];
+    float* random_data = new float[RANDOM_BUFFER_SIZE * 4];
     
     std::random_device dev;
     std::mt19937 rng(dev());
@@ -74,30 +75,29 @@ void RayTracer::createCLBuffers() {
     std::normal_distribution<float> ndis(0.0f, 1.0f);
     
     for(int i = 0; i < RANDOM_BUFFER_SIZE; i++) {
-        float x = ndis(rng), y = ndis(rng), z = ndis(rng), r = std::cbrt(dis(rng));
+        float x = ndis(rng), y = ndis(rng), z = ndis(rng), r = std::cbrt(dis(rng)), u = dis(rng);
         float len_inv_r = r / std::sqrt(x * x + y * y + z * z);
         x *= len_inv_r;
         y *= len_inv_r;
         z *= len_inv_r;
-        random_vectors[i]     = x;
-        random_vectors[i + 1] = y;
-        random_vectors[i + 2] = z;
+        random_data[3 * i]     = x;
+        random_data[3 * i + 1] = y;
+        random_data[3 * i + 2] = z;
+        
+        random_data[3 * RANDOM_BUFFER_SIZE + i] = u;
     }
     
     cl::CommandQueue queue(context, device);
-    queue.enqueueWriteBuffer(random_buffer, CL_TRUE, 0, random_buffer_size, random_vectors);
+    queue.enqueueWriteBuffer(random_buffer, CL_TRUE, 0, random_buffer_size, random_data);
     queue.finish();
     
-    delete [] random_vectors;
-    
-    //count_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_int));
+    delete [] random_data;
 }
 
 void RayTracer::createKernels() {
     trace_kernel = cl::Kernel(program, TRACE_KERNEL_NAME);
+    retrace_kernel = cl::Kernel(program, RETRACE_KERNEL_NAME);
     scene_kernel = cl::Kernel(program, SCENE_KERNEL_NAME);
-    //count_kernel = cl::Kernel(program, "test_inc");
-    //start_kernel = cl::Kernel(program, "test_start");
 }
 
 void RayTracer::setKernelArgs() {
@@ -105,9 +105,12 @@ void RayTracer::setKernelArgs() {
     trace_kernel.setArg(1, camera_buffer);
     trace_kernel.setArg(2, random_buffer);
     trace_kernel.setArg(3, scene_buffer);
+    retrace_kernel.setArg(0, image);
+    retrace_kernel.setArg(1, image);
+    retrace_kernel.setArg(2, camera_buffer);
+    retrace_kernel.setArg(3, random_buffer);
+    retrace_kernel.setArg(4, scene_buffer);
     scene_kernel.setArg(0, scene_buffer);
-    //count_kernel.setArg(0, count_buffer);
-    //start_kernel.setArg(0, count_buffer);
 }
 
 void RayTracer::setTime(float time) {
@@ -115,22 +118,41 @@ void RayTracer::setTime(float time) {
 }
 
 void RayTracer::render(const Camera* camera) {
+    sample_counter = 0;
+    
     try {
         std::vector<cl::Memory> mem_objs;
         mem_objs.push_back(image);
     
         cl::CommandQueue queue(context, device);
         
-       /* queue.enqueueNDRangeKernel(start_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
-        queue.enqueueNDRangeKernel(count_kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);
-        queue.enqueueBarrierWithWaitList();
-        int result;
-        queue.enqueueReadBuffer(count_buffer, CL_TRUE, 0, sizeof(int), &result);
-        std::cout << result << std::endl;*/
         queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
         queue.enqueueAcquireGLObjects(&mem_objs);
         queue.enqueueWriteBuffer(camera_buffer, CL_TRUE, 0, buff_size, camera->transferData());
         queue.enqueueNDRangeKernel(trace_kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);
+        queue.enqueueReleaseGLObjects(&mem_objs);
+        queue.enqueueBarrierWithWaitList();
+        queue.finish();
+    } catch(cl::Error e) {
+        processError(e);
+    }
+}
+
+void RayTracer::renderAgain(const Camera* camera) {
+    sample_counter++;
+    
+    try {
+        retrace_kernel.setArg(5, sample_counter);
+        
+        std::vector<cl::Memory> mem_objs;
+        mem_objs.push_back(image);
+        
+        cl::CommandQueue queue(context, device);
+        
+        //queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
+        queue.enqueueAcquireGLObjects(&mem_objs);
+        queue.enqueueWriteBuffer(camera_buffer, CL_TRUE, 0, buff_size, camera->transferData());
+        queue.enqueueNDRangeKernel(retrace_kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);
         queue.enqueueReleaseGLObjects(&mem_objs);
         queue.enqueueBarrierWithWaitList();
         queue.finish();
