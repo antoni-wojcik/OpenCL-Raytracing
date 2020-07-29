@@ -1,7 +1,7 @@
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
-#define DEPTH 10
-#define NUM_MATERIALS 6
+#define DEPTH 30
+#define NUM_MATERIALS 8
 #define NUM_SPHERES 7
 #define NUM_PLANES 1
 #define NUM_LENSES 1
@@ -19,7 +19,7 @@ typedef struct {
     float param; //has to be set to 0 when initalized
 } Ray;
 
-typedef enum { t_refractive, t_reflective, t_dielectric, t_diffuse } MatType;
+typedef enum { t_refractive, t_reflective, t_dielectric, t_diffuse, t_light } MatType;
 
 typedef struct {
     MatType type;
@@ -340,10 +340,16 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
         HPI hpi;
         bool hit = hitScene(r, scene, &hpi);
         if(!hit) {
-            out = min(out, bkgCol(r));
+            out = (col)(0.0f);//min(out, bkgCol(r));
             break;
         } else {
             switch(hpi.mat->type) {
+                case t_diffuse:
+                    rayScatter(r, &out, &hpi, random_buffer, i + sample);
+                    break;
+                case t_light:
+                    i = DEPTH;
+                    break;
                 case t_reflective:
                     rayReflect(r, &out, &hpi);
                     break;
@@ -353,9 +359,6 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
                 case t_dielectric:
                     rayRefractDielectric(r, &out, &hpi, random_buffer, i + sample);
                     break;
-                case t_diffuse:
-                    rayScatter(r, &out, &hpi, random_buffer, i + sample);
-                    break;
             }
             
             out = min(out, hpi.mat->color); // mix colors
@@ -363,6 +366,14 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
     }
     
     return out;
+}
+
+inline col gamma_corr(const col* color) {
+    return sqrt(*color);
+}
+
+inline col gamma_corr_inv(const col* color) {
+    return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA); 
 }
 
 __kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene) {
@@ -378,7 +389,7 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     
     col out = getCol(&r_main, random_buffer, scene, 0);
     
-    write_imagef(image, (int2)(x, y), (float4)(out, 1.0f));
+    write_imagef(image, (int2)(x, y), (float4)(gamma_corr(&out), 1.0f));
 }
 
 __kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, const int sample) {
@@ -393,13 +404,14 @@ __kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t ima
     
     Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
     
-    col old_col = read_imagef(image_in, sampler, loc).xyz;
+    col prev_col = read_imagef(image_in, sampler, loc).xyz;
     
     float mixing_param = (float)(sample)/(float)(sample + 1);
     
-    col out = mix(getCol(&r_main, random_buffer, scene, sample), old_col, mixing_param);
+    col out = mix(getCol(&r_main, random_buffer, scene, sample), gamma_corr_inv(&prev_col), mixing_param);
     
-    write_imagef(image_out, loc, (float4)(out, 1.0f));
+    // use sqrt for gamma_corr correction
+    write_imagef(image_out, loc, (float4)(gamma_corr(&out), 1.0f));
 }
 
 
@@ -408,20 +420,22 @@ inline __global Material* getMaterial(__global Scene* scene, int id) {
 }
 
 __kernel void createScene(__global Scene* scene, float time) {
-    scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.95f};
+    scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.8f};
     scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
     scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
     scene->materials[3] = (Material){t_diffuse, (col)(1.0f, 0.0f, 0.0f), 0.5f};
     scene->materials[4] = (Material){t_diffuse, (col)(0.0f, 1.0f, 0.0f), 0.5f};
     scene->materials[5] = (Material){t_dielectric, (col)(1.0f), 1.3f};
+    scene->materials[6] = (Material){t_light, (col)(1.0f), 0.0f};
+    scene->materials[7] = (Material){t_diffuse, (col)(1.0f), 1.0f};
     
     scene->spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, getMaterial(scene, 0)};
     scene->spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, getMaterial(scene, 0)};
     scene->spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, getMaterial(scene, 1)};
     scene->spheres[3] = (Sphere){(vec3)(-0.02f, -3.0f, 0.0f), 1.0f, getMaterial(scene, 3)};
     scene->spheres[4] = (Sphere){(vec3)(2.02f, -3.0f, 0.0f), 1.0f, getMaterial(scene, 4)};
-    scene->spheres[5] = (Sphere){(vec3)(1.0f, -4.9f, 0.0f), 1.1f, getMaterial(scene, 0)};
+    scene->spheres[5] = (Sphere){(vec3)(1.0f, -200.0f, 0.0f), 100.0f, getMaterial(scene, 6)};
     scene->spheres[6] = (Sphere){(vec3)(-3.0f, 0.0f, 0.0f), 1.0f, getMaterial(scene, 5)};
-    scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 0)};
+    scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 7)};
     scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
 }
