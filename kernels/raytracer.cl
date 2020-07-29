@@ -1,10 +1,13 @@
+#define TRIANGLE_EPSILON 0.0000001f
+
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
-#define DEPTH 30
+#define DEPTH 10
 #define NUM_MATERIALS 8
 #define NUM_SPHERES 7
 #define NUM_PLANES 1
 #define NUM_LENSES 1
+#define NUM_MESHES 0
 
 #define RANDOM_BUFFER_SIZE 100000
 
@@ -69,11 +72,23 @@ inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __glo
 }
 
 typedef struct {
+    int size;
+    int index_anchor;
+    __global vec3* vertex_buffer;
+    __global Material* mat;
+} Mesh;
+
+inline __global vec3* getMeshVertex(__global const Mesh* mesh, int i) {
+    return mesh->vertex_buffer + mesh->index_anchor + i;
+}
+
+typedef struct {
     Material materials[NUM_MATERIALS];
     
     Sphere spheres[NUM_SPHERES];
     Plane planes[NUM_PLANES];
     Lens lenses[NUM_LENSES];
+    Mesh meshes[NUM_MESHES];
 } Scene;
 
 inline vec3 getVec(__global const float* buff, int id) {
@@ -220,6 +235,49 @@ bool hitLens(const Ray* r, __global const Lens* lens, HPI* hpi) {
     return false;
 }
 
+bool hitTriangle(const Ray* r, __global const vec3* A, __global const vec3* B, __global const vec3* C, HPI* hpi) {
+    // Moller-Trumbore algorithm
+    
+    vec3 edge1 = (*B) - (*A);
+    vec3 edge2 = (*C) - (*A);
+    vec3 h = cross(r->dir, edge2);
+    float a = dot(edge1, h);
+    if(a > -TRIANGLE_EPSILON && a < TRIANGLE_EPSILON) return false; // ray parallel to this triangle
+    
+    float f = 1.0f / a;
+    vec3 s = r->origin - (*A);
+    float u = f * dot(s, h);
+    if(u < 0.0f || u > 1.0f) return false;
+    
+    vec3 q = cross(s, edge1);
+    float v = f * dot(r->dir, q);
+    if(v < 0.0f || u + v > 1.0f) return false;
+    
+    float temp = f * dot(edge2, q);
+    if(inRayRange(temp)) {
+        hpi->t = temp;
+        hpi->p = rayPointAtParam(r, temp);
+        // ASSUME COUNTER-CLOCKWISE WINDING ORDER
+        hpi->normal = normalize(cross(edge1, edge2));
+        //hpi->mat = lens->mat; the mesh takes care of this
+        return true;
+    } else return false;
+}
+
+bool hitMeshOut(const Ray* r, __global const Mesh* mesh, HPI* hpi) {
+    // ASSUME THAT THE MESH IS CONVEX
+    int vertex_count = mesh->size;
+    for(int i = 0; i < vertex_count; i++) {
+        if(hitTriangle(r, getMeshVertex(mesh, i), getMeshVertex(mesh, i + 1), getMeshVertex(mesh, i + 2), hpi)) {
+            if(dot(hpi->normal, r->dir) < 0.0f) {
+                hpi->mat = mesh->mat;
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
 
 bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
     bool hit_any = false;
@@ -244,6 +302,14 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
     
     for(int i = 0; i < NUM_LENSES; i++) {
         if(hitLens(r, scene->lenses + i, &hpi_result) && hpi_result.t < hit_min) {
+            hit_any = true;
+            *hpi = hpi_result;
+            hit_min = hpi_result.t;
+        }
+    }
+    
+    for(int i = 0; i < NUM_MESHES; i++) {
+        if(hitMeshOut(r, scene->meshes + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
             hit_min = hpi_result.t;
@@ -373,7 +439,7 @@ inline col gamma_corr(const col* color) {
 }
 
 inline col gamma_corr_inv(const col* color) {
-    return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA); 
+    return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA);
 }
 
 __kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene) {
