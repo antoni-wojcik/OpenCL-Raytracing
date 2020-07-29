@@ -7,7 +7,7 @@
 #define NUM_SPHERES 7
 #define NUM_PLANES 1
 #define NUM_LENSES 1
-#define NUM_MESHES 0
+#define NUM_MESHES 1
 
 #define RANDOM_BUFFER_SIZE 100000
 
@@ -75,11 +75,12 @@ typedef struct {
     int size;
     int index_anchor;
     __global vec3* vertex_buffer;
+    __global int* index_buffer;
     __global Material* mat;
 } Mesh;
 
 inline __global vec3* getMeshVertex(__global const Mesh* mesh, int i) {
-    return mesh->vertex_buffer + mesh->index_anchor + i;
+    return mesh->vertex_buffer + mesh->index_buffer[mesh->index_anchor + i];
 }
 
 typedef struct {
@@ -268,7 +269,7 @@ bool hitMeshOut(const Ray* r, __global const Mesh* mesh, HPI* hpi) {
     // ASSUME THAT THE MESH IS CONVEX
     int vertex_count = mesh->size;
     for(int i = 0; i < vertex_count; i++) {
-        if(hitTriangle(r, getMeshVertex(mesh, i), getMeshVertex(mesh, i + 1), getMeshVertex(mesh, i + 2), hpi)) {
+        if(hitTriangle(r, getMeshVertex(mesh, 3 * i), getMeshVertex(mesh, 3 * i + 1), getMeshVertex(mesh, 3 * i + 2), hpi)) {
             if(dot(hpi->normal, r->dir) < 0.0f) {
                 hpi->mat = mesh->mat;
                 return true;
@@ -442,7 +443,7 @@ inline col gamma_corr_inv(const col* color) {
     return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA);
 }
 
-__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene) {
+__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __global const vec3* vertex_buffer, __global const int* index_buffer) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     
@@ -458,7 +459,7 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     write_imagef(image, (int2)(x, y), (float4)(gamma_corr(&out), 1.0f));
 }
 
-__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, const int sample) {
+__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __global const vec3* vertex_buffer, __global const int* index_buffer, const int sample) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     int2 loc = (int2)(x, y);
@@ -485,7 +486,7 @@ inline __global Material* getMaterial(__global Scene* scene, int id) {
     return scene->materials + id;
 }
 
-__kernel void createScene(__global Scene* scene, float time) {
+__kernel void createScene(__global Scene* scene, __global vec3* vertex_buffer, __global int* index_buffer, float time) {
     scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.8f};
     scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
     scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
@@ -504,4 +505,6 @@ __kernel void createScene(__global Scene* scene, float time) {
     scene->spheres[6] = (Sphere){(vec3)(-3.0f, 0.0f, 0.0f), 1.0f, getMaterial(scene, 5)};
     scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 7)};
     scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
+    
+    scene->meshes[0] = (Mesh){4, 0, vertex_buffer, index_buffer, getMaterial(scene, 4)};
 }

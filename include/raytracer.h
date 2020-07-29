@@ -23,7 +23,7 @@ private:
     
     cl::Kernel trace_kernel, retrace_kernel, scene_kernel;
     cl::ImageGL image;
-    cl::Buffer scene_buffer, random_buffer, camera_buffer;
+    cl::Buffer scene_buffer, random_buffer, camera_buffer, vertex_buffer, index_buffer;
     size_t image_size, buff_size;
     
     void createGLTextures();
