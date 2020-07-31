@@ -9,8 +9,7 @@
 #include <stdio.h>
 #include "model.h"
 
-void Model::loadModel(std::string path) {
-    Assimp::Importer importer;
+void ModelLoader::loadModel(std::string path) {
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
     
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
@@ -18,21 +17,32 @@ void Model::loadModel(std::string path) {
         return;
     }
     
-    processNode(scene->mRootNode, scene);
+    static cl_uint mesh_count_total = 0;
+    
+    cl_uint mesh_count = processNode(scene->mRootNode, scene); // TODO: NOT SURE IF THE RESULT IS CORRECT
+    models.push_back((Model){mesh_count_total, mesh_count});
+    
+    mesh_count_total += mesh_count;
 }
 
-void Model::processNode(aiNode* node, const aiScene* scene) {
+cl_uint ModelLoader::processNode(aiNode* node, const aiScene* scene) {
+    cl_uint mesh_count = 0;
+    
     for(unsigned int i = 0; i < node->mNumMeshes; i++) {
+        mesh_count++;
+        
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
         meshes.push_back(processMesh(mesh, scene));
     }
     
     for(unsigned int i = 0; i < node->mNumChildren; i++) {
-        processNode(node->mChildren[i], scene);
+        mesh_count += processNode(node->mChildren[i], scene);
     }
+    
+    return mesh_count;
 }
 
-Mesh Model::processMesh(aiMesh* mesh, const aiScene* scene) {
+Mesh ModelLoader::processMesh(aiMesh* mesh, const aiScene* scene) {
     cl_uint index_anchor = (cl_uint)indices.size();
     cl_uint face_count = 0;
     

@@ -32,28 +32,36 @@ struct Mesh {
     Mesh(cl_uint index_anchor, cl_uint face_count) : index_anchor(index_anchor), face_count(face_count) {}
 };
 
-class Model {
+struct Model {
+    cl_uint mesh_anchor;
+    cl_uint mesh_count;
+    
+    Model(cl_uint mesh_anchor, cl_uint mesh_count) : mesh_anchor(mesh_anchor), mesh_count(mesh_count) {}
+};
+
+class ModelLoader {
 private:
+    Assimp::Importer importer;
+    
     std::vector<cl_float3> vertices;
     std::vector<cl_uint> indices;
     std::vector<Mesh> meshes;
+    std::vector<Model> models;
     
-    void loadModel(std::string path);
-    void processNode(aiNode* node, const aiScene* scene);
+    cl_uint processNode(aiNode* node, const aiScene* scene);
     Mesh processMesh(aiMesh* mesh, const aiScene* scene);
-    
 public:
-    Model(const char* path) {
-        loadModel(path);
-    }
+    void loadModel(std::string path);
     
     inline cl_float3* getVertices() { return &(vertices[0]); }
     inline cl_uint* getIndices() { return &(indices[0]); }
     inline Mesh* getMeshes() { return &(meshes[0]); }
+    inline Model* getModels() { return &(models[0]); }
     
-    inline size_t getVSize() { return sizeof(cl_float3) * vertices.size(); }
-    inline size_t getISize() { return sizeof(cl_uint) * indices.size(); }
-    inline size_t getMSize() { return sizeof(Mesh) * meshes.size(); }
+    inline size_t getVertexSize() { return sizeof(cl_float3) * vertices.size(); }
+    inline size_t getIndexSize() { return sizeof(cl_uint) * indices.size(); }
+    inline size_t getMeshSize() { return sizeof(Mesh) * meshes.size(); }
+    inline size_t getModelSize() { return sizeof(Model) * models.size(); }
 };
 
 #endif /* model_h */

@@ -95,16 +95,23 @@ void RayTracer::createCLBuffers() {
     delete [] random_data;
     
     // load models
-    Model model("assets/cube/cube.obj");
+    ModelLoader ml;
+    ml.loadModel("assets/cube/cube.obj");
     
-    vertex_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, model.getVSize());
-    index_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, model.getISize());
-    mesh_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, model.getMSize());
+    //cl::Buffer model_buffer;
+    
+    vertex_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getVertexSize());
+    index_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getIndexSize());
+    mesh_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getMeshSize());
+    //model_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, ml.getModelSize());
+    
+    //scene_kernel.setArg(4, model_buffer);
     
     cl::CommandQueue queue2(context, device);
-    queue2.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, model.getVSize(), model.getVertices());
-    queue2.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, model.getISize(), model.getIndices());
-    queue2.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, model.getMSize(), model.getMeshes());
+    queue2.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, ml.getVertexSize(), ml.getVertices());
+    queue2.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, ml.getIndexSize(), ml.getIndices());
+    queue2.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, ml.getMeshSize(), ml.getMeshes());
+    //queue2.enqueueWriteBuffer(model_buffer, CL_TRUE, 0, ml.getModelSize(), ml.getModels());
     queue2.finish();
 }
 
