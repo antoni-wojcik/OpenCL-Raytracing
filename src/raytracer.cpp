@@ -95,40 +95,17 @@ void RayTracer::createCLBuffers() {
     delete [] random_data;
     
     // load models
-    vertex_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_float3) * (2 + NUM_TRIANGLES));
-    index_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_int) * 3 * NUM_TRIANGLES);
+    Model model("assets/cube/cube.obj");
     
-    cl_float3* vertex_data = new cl_float3[NUM_TRIANGLES + 2];
-    cl_int* index_data = new cl_int[3 * NUM_TRIANGLES];
-    
-    vertex_data[0] = (cl_float3){0.0f, -1.0f, 0.0f};
-    vertex_data[1] = (cl_float3){0.0f, 0.0f, 0.0f};
-    vertex_data[2] = (cl_float3){1.0f, -1.0f, 0.0f};
-    vertex_data[3] = (cl_float3){1.0f, 0.0f, 0.0f};
-    vertex_data[4] = (cl_float3){0.0f, -1.0f, 1.0f};
-    vertex_data[5] = (cl_float3){1.0f, -1.0f, 1.0f};
-    
-    index_data[0] = 0;
-    index_data[1] = 1;
-    index_data[2] = 2;
-    index_data[3] = 1;
-    index_data[4] = 3;
-    index_data[5] = 2;
-    
-    index_data[6] = 4;
-    index_data[7] = 0;
-    index_data[8] = 2;
-    index_data[9] = 4;
-    index_data[10] = 2;
-    index_data[11] = 5;
+    vertex_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, model.getVSize());
+    index_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, model.getISize());
+    mesh_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, model.getMSize());
     
     cl::CommandQueue queue2(context, device);
-    queue2.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, sizeof(cl_float3) * (2 + NUM_TRIANGLES), vertex_data);
-    queue2.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, sizeof(cl_int) * 3 * NUM_TRIANGLES, index_data);
+    queue2.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, model.getVSize(), model.getVertices());
+    queue2.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, model.getISize(), model.getIndices());
+    queue2.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, model.getMSize(), model.getMeshes());
     queue2.finish();
-    
-    delete [] vertex_data;
-    delete [] index_data;
 }
 
 void RayTracer::createKernels() {
@@ -154,10 +131,11 @@ void RayTracer::setKernelArgs() {
     scene_kernel.setArg(0, scene_buffer);
     scene_kernel.setArg(1, vertex_buffer);
     scene_kernel.setArg(2, index_buffer);
+    scene_kernel.setArg(3, mesh_buffer);
 }
 
 void RayTracer::setTime(float time) {
-    scene_kernel.setArg(3, time);
+    scene_kernel.setArg(4, time);
 }
 
 void RayTracer::render(const Camera* camera) {

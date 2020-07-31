@@ -7,7 +7,7 @@
 #define NUM_SPHERES 7
 #define NUM_PLANES 1
 #define NUM_LENSES 1
-#define NUM_MESHES 1
+#define NUM_MODELS 1
 
 #define RANDOM_BUFFER_SIZE 100000
 
@@ -72,15 +72,19 @@ inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __glo
 }
 
 typedef struct {
-    int size;
-    int index_anchor;
-    __global vec3* vertex_buffer;
-    __global int* index_buffer;
-    __global Material* mat;
+    uint index_anchor;
+    uint face_count;
 } Mesh;
 
-inline __global vec3* getMeshVertex(__global const Mesh* mesh, int i) {
-    return mesh->vertex_buffer + mesh->index_buffer[mesh->index_anchor + i];
+typedef struct {
+    __global vec3* vertex_buffer;
+    __global uint* index_buffer;
+    __global Mesh* meshes;
+    __global Material* mat;
+} Model;
+
+inline __global vec3* getMeshVertex(__global const Model* model, __global const Mesh* mesh, int i) {
+    return model->vertex_buffer + model->index_buffer[mesh->index_anchor + i];
 }
 
 typedef struct {
@@ -89,7 +93,7 @@ typedef struct {
     Sphere spheres[NUM_SPHERES];
     Plane planes[NUM_PLANES];
     Lens lenses[NUM_LENSES];
-    Mesh meshes[NUM_MESHES];
+    Model models[NUM_MODELS];
 } Scene;
 
 inline vec3 getVec(__global const float* buff, int id) {
@@ -265,19 +269,23 @@ bool hitTriangle(const Ray* r, __global const vec3* A, __global const vec3* B, _
     } else return false;
 }
 
-bool hitMeshOut(const Ray* r, __global const Mesh* mesh, HPI* hpi) {
+bool hitMeshOut(const Ray* r, __global const Model* model, __global const Mesh* mesh, HPI* hpi) {
     // ASSUME THAT THE MESH IS CONVEX
-    int vertex_count = mesh->size;
-    for(int i = 0; i < vertex_count; i++) {
-        if(hitTriangle(r, getMeshVertex(mesh, 3 * i), getMeshVertex(mesh, 3 * i + 1), getMeshVertex(mesh, 3 * i + 2), hpi)) {
+    int face_count = mesh->face_count;
+    for(int i = 0; i < face_count; i++) {
+        if(hitTriangle(r, getMeshVertex(model, mesh, 3 * i), getMeshVertex(model, mesh, 3 * i + 1), getMeshVertex(model, mesh, 3 * i + 2), hpi)) {
             if(dot(hpi->normal, r->dir) < 0.0f) {
-                hpi->mat = mesh->mat;
+                hpi->mat = model->mat;
                 return true;
             }
         }
     }
     
     return false;
+}
+
+bool hitModel(const Ray* r, __global const Model* model, HPI* hpi) {
+    return hitMeshOut(r, model, model->meshes, hpi);
 }
 
 bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
@@ -309,8 +317,8 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(int i = 0; i < NUM_MESHES; i++) {
-        if(hitMeshOut(r, scene->meshes + i, &hpi_result) && hpi_result.t < hit_min) {
+    for(int i = 0; i < NUM_MODELS; i++) {
+        if(hitModel(r, scene->models + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
             hit_min = hpi_result.t;
@@ -486,7 +494,7 @@ inline __global Material* getMaterial(__global Scene* scene, int id) {
     return scene->materials + id;
 }
 
-__kernel void createScene(__global Scene* scene, __global vec3* vertex_buffer, __global int* index_buffer, float time) {
+__kernel void createScene(__global Scene* scene, __global vec3* vertex_buffer, __global uint* index_buffer, __global Mesh* mesh_buffer, float time) {
     scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.8f};
     scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
     scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
@@ -506,5 +514,5 @@ __kernel void createScene(__global Scene* scene, __global vec3* vertex_buffer, _
     scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 7)};
     scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
     
-    scene->meshes[0] = (Mesh){4, 0, vertex_buffer, index_buffer, getMaterial(scene, 4)};
+    scene->models[0] = (Model){vertex_buffer, index_buffer, mesh_buffer, getMaterial(scene, 0)};
 }

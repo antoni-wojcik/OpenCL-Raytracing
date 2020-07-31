@@ -12,6 +12,7 @@
 #include "kernelgl.h"
 #include "glm.hpp"
 #include "screen.h"
+#include "model.h"
 
 class RayTracer : KernelGL {
 private:
@@ -23,7 +24,7 @@ private:
     
     cl::Kernel trace_kernel, retrace_kernel, scene_kernel;
     cl::ImageGL image;
-    cl::Buffer scene_buffer, random_buffer, camera_buffer, vertex_buffer, index_buffer;
+    cl::Buffer scene_buffer, random_buffer, camera_buffer, vertex_buffer, index_buffer, mesh_buffer;
     size_t image_size, buff_size;
     
     void createGLTextures();
@@ -41,7 +42,6 @@ public:
     void transferImage(Screen* screen, const char* shader_tex_id);
     void setTime(float time);
     void resize(int w, int h);
-    
 };
 
 #endif /* raytracer_h */
