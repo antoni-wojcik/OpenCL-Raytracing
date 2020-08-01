@@ -34,19 +34,19 @@ typedef struct {
     float t;
     vec3 p;
     vec3 normal;
-    __global Material* mat;
+    __global const Material* mat;
 } HPI; //HitPointInfo
 
 typedef struct {
     vec3 pos;
     float r;
-    __global Material* mat;
+    __global const Material* mat;
 } Sphere;
 
 typedef struct {
     vec3 pos;
     vec3 normal;
-    __global Material* mat;
+    __global const Material* mat;
 } Plane;
 
 typedef struct {
@@ -55,15 +55,15 @@ typedef struct {
     vec3 p2;
     float r1;
     float r2;
-    __global Material* mat;
+    __global const Material* mat;
 } Lens;
 
-inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __global Material* mat) {
+inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __global const Material* mat) {
     //if(r1 < h && r2 < h) abort();
     Lens lens;
     lens.pos = pos;
-    lens.p1 = pos + normal * sqrt(r1 * r1 - h * h);;
-    lens.p2 = pos - normal * sqrt(r2 * r2 - h * h);;
+    lens.p1 = pos + normal * sqrt(r1 * r1 - h * h);
+    lens.p2 = pos - normal * sqrt(r2 * r2 - h * h);
     lens.r1 = r1;
     lens.r2 = r2;
     lens.mat = mat;
@@ -77,39 +77,49 @@ typedef struct {
 } Mesh;
 
 typedef struct {
-    __global vec3* vertex_buffer;
-    __global uint* index_buffer;
-    __global Mesh* meshes;
-    __global Material* mat;
+    uint mesh_anchor;
+    uint mesh_count;
+    uint mat_ID;
 } Model;
 
-inline __global vec3* getMeshVertex(__global const Model* model, __global const Mesh* mesh, int i) {
-    return model->vertex_buffer + model->index_buffer[mesh->index_anchor + i];
-}
-
 typedef struct {
+    __global const vec3* vertex_buffer;
+    __global const uint* index_buffer;
+    __global const Mesh* mesh_buffer;
+    __global const Model* model_buffer;
+    
+    uint material_count;
+
+    uint model_count;
+    uint sphere_count;
+    uint plane_count;
+    uint lens_count;
+    
     Material materials[NUM_MATERIALS];
     
     Sphere spheres[NUM_SPHERES];
     Plane planes[NUM_PLANES];
     Lens lenses[NUM_LENSES];
-    Model models[NUM_MODELS];
 } Scene;
 
-inline vec3 getVec(__global const float* buff, int id) {
+inline __global vec3* getMeshVertex(__global const Scene* scene, __global const Mesh* mesh, uint i) {
+    return scene->vertex_buffer + scene->index_buffer[mesh->index_anchor + i];
+}
+
+inline vec3 getVec(__global const float* buff, uint id) {
     return (vec3)(buff[id], buff[id + 1], buff[id + 2]);
 }
 
-inline vec3 randomVec(__global const float* random_buffer, const Ray* r, int s_seed) {
-    int rand_val = (int)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
-    int seed = ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1)) * 3) % RANDOM_BUFFER_SIZE;
+inline vec3 randomVec(__global const float* random_buffer, const Ray* r, uint s_seed) {
+    uint rand_val = (uint)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
+    uint seed = ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1)) * 3) % RANDOM_BUFFER_SIZE;
     
     return getVec(random_buffer, seed);
 }
 
-inline float random(__global const float* random_buffer, const Ray* r, int s_seed) {
-    int rand_val = (int)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
-    int seed = RANDOM_BUFFER_SIZE * 3 + ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1))) % RANDOM_BUFFER_SIZE;
+inline float random(__global const float* random_buffer, const Ray* r, uint s_seed) {
+    uint rand_val = (uint)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
+    uint seed = RANDOM_BUFFER_SIZE * 3 + ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1))) % RANDOM_BUFFER_SIZE;
     
     return random_buffer[seed];
 }
@@ -130,6 +140,10 @@ Ray genInitRay(__global const float* camera_buffer, const vec3* origin, float s,
 
 vec3 rayPointAtParam(const Ray* r, float t) {
     return r->origin + r->dir * t;
+}
+
+inline __global const Material* getMaterial(__global const Scene* scene, uint id) {
+    return scene->materials + id;
 }
 
 bool hitSphere(const Ray* r, __global const Sphere* s, HPI* hpi) {
@@ -269,13 +283,12 @@ bool hitTriangle(const Ray* r, __global const vec3* A, __global const vec3* B, _
     } else return false;
 }
 
-bool hitMeshOut(const Ray* r, __global const Model* model, __global const Mesh* mesh, HPI* hpi) {
+bool hitMeshOut(const Ray* r, __global const Scene* scene, __global const Model* model, __global const Mesh* mesh, HPI* hpi) {
     // ASSUME THAT THE MESH IS CONVEX
-    int face_count = mesh->face_count;
-    for(int i = 0; i < face_count; i++) {
-        if(hitTriangle(r, getMeshVertex(model, mesh, 3 * i), getMeshVertex(model, mesh, 3 * i + 1), getMeshVertex(model, mesh, 3 * i + 2), hpi)) {
+    for(uint i = 0; i < mesh->face_count; i++) {
+        if(hitTriangle(r, getMeshVertex(scene, mesh, 3 * i), getMeshVertex(scene, mesh, 3 * i + 1), getMeshVertex(scene, mesh, 3 * i + 2), hpi)) {
             if(dot(hpi->normal, r->dir) < 0.0f) {
-                hpi->mat = model->mat;
+                hpi->mat = getMaterial(scene, model->mat_ID);
                 return true;
             }
         }
@@ -284,8 +297,20 @@ bool hitMeshOut(const Ray* r, __global const Model* model, __global const Mesh* 
     return false;
 }
 
-bool hitModel(const Ray* r, __global const Model* model, HPI* hpi) {
-    return hitMeshOut(r, model, model->meshes, hpi);
+bool hitModel(const Ray* r, __global const Scene* scene, __global const Model* model, HPI* hpi) {
+    bool hit_any = false;
+    float hit_min = MAX_DISTANCE;
+    HPI hpi_result;
+    
+    for(uint i = 0; i < model->mesh_count; i++) {
+        if(hitMeshOut(r, scene, model, scene->mesh_buffer + model->mesh_anchor + i, &hpi_result) && hpi_result.t < hit_min) {
+            hit_any = true;
+            *hpi = hpi_result;
+            hit_min = hpi_result.t;
+        }
+    }
+    
+    return hit_any;
 }
 
 bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
@@ -293,7 +318,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
     float hit_min = MAX_DISTANCE;
     HPI hpi_result;
     
-    for(int i = 0; i < NUM_SPHERES; i++) {
+    for(uint i = 0; i < NUM_SPHERES; i++) {
         if(hitSphere(r, scene->spheres + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
@@ -301,7 +326,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(int i = 0; i < NUM_PLANES; i++) {
+    for(uint i = 0; i < NUM_PLANES; i++) {
         if(hitPlane(r, scene->planes + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
@@ -309,7 +334,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(int i = 0; i < NUM_LENSES; i++) {
+    for(uint i = 0; i < NUM_LENSES; i++) {
         if(hitLens(r, scene->lenses + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
@@ -317,8 +342,8 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(int i = 0; i < NUM_MODELS; i++) {
-        if(hitModel(r, scene->models + i, &hpi_result) && hpi_result.t < hit_min) {
+    for(uint i = 0; i < NUM_MODELS; i++) {
+        if(hitModel(r, scene, scene->model_buffer + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
             hit_min = hpi_result.t;
@@ -359,7 +384,7 @@ void rayRefract(Ray* r, col* c, HPI* hpi) {
     }
 }
 
-void rayScatter(Ray* r, col* c, const HPI* hpi, __global const float* random_buffer, int s_seed) {
+void rayScatter(Ray* r, col* c, const HPI* hpi, __global const float* random_buffer, uint s_seed) {
     vec3 random_in_sphere = randomVec(random_buffer, r, s_seed);
     r->dir = normalize(hpi->normal + random_in_sphere);
     r->origin = hpi->p;
@@ -373,7 +398,7 @@ float schlick(float cai, float idx_ratio) {
     return r0 + (1.0f - r0) * pow((1.0f - cai), 5);
 }
 
-void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random_buffer, int s_seed) {
+void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random_buffer, uint s_seed) {
     vec3 normal;
     float idx_ratio;
     float cai = dot(r->dir, hpi->normal); //cos_angle_incident
@@ -408,10 +433,10 @@ inline col bkgCol(const Ray *r) {
     return (col)(y * 0.6f + 0.1f, y, 1.0f);
 }
 
-col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, int sample) {
+col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, uint sample) {
     col out = (col)(1.0f);
     
-    for(int i = 0; i < DEPTH; i++) {
+    for(uint i = 0; i < DEPTH; i++) {
         HPI hpi;
         bool hit = hitScene(r, scene, &hpi);
         if(!hit) {
@@ -451,7 +476,7 @@ inline col gamma_corr_inv(const col* color) {
     return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA);
 }
 
-__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __global const vec3* vertex_buffer, __global const int* index_buffer) {
+__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     
@@ -467,7 +492,7 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     write_imagef(image, (int2)(x, y), (float4)(gamma_corr(&out), 1.0f));
 }
 
-__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __global const vec3* vertex_buffer, __global const int* index_buffer, const int sample) {
+__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, const uint sample) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     int2 loc = (int2)(x, y);
@@ -489,12 +514,12 @@ __kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t ima
     write_imagef(image_out, loc, (float4)(gamma_corr(&out), 1.0f));
 }
 
-
-inline __global Material* getMaterial(__global Scene* scene, int id) {
-    return scene->materials + id;
-}
-
-__kernel void createScene(__global Scene* scene, __global vec3* vertex_buffer, __global uint* index_buffer, __global Mesh* mesh_buffer, float time) {
+__kernel void createScene(__global Scene* scene, __global const vec3* vertex_buffer, __global const uint* index_buffer, __global const Mesh* mesh_buffer, __global const Model* model_buffer) {
+    scene->vertex_buffer = vertex_buffer;
+    scene->index_buffer = index_buffer;
+    scene->mesh_buffer = mesh_buffer;
+    scene->model_buffer = model_buffer;
+    
     scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.8f};
     scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
     scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
@@ -513,6 +538,4 @@ __kernel void createScene(__global Scene* scene, __global vec3* vertex_buffer, _
     scene->spheres[6] = (Sphere){(vec3)(-3.0f, 0.0f, 0.0f), 1.0f, getMaterial(scene, 5)};
     scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 7)};
     scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
-    
-    scene->models[0] = (Model){vertex_buffer, index_buffer, mesh_buffer, getMaterial(scene, 0)};
 }

@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include "model.h"
 
-void ModelLoader::loadModel(std::string path) {
+void ModelLoader::loadModel(std::string path, cl_uint mat_ID) {
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
     
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
@@ -20,7 +20,7 @@ void ModelLoader::loadModel(std::string path) {
     static cl_uint mesh_count_total = 0;
     
     cl_uint mesh_count = processNode(scene->mRootNode, scene); // TODO: NOT SURE IF THE RESULT IS CORRECT
-    models.push_back((Model){mesh_count_total, mesh_count});
+    models.push_back((Model){mesh_count_total, mesh_count, mat_ID});
     
     mesh_count_total += mesh_count;
 }

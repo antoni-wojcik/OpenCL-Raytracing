@@ -18,13 +18,13 @@ class RayTracer : KernelGL {
 private:
     int width, height;
     
-    int sample_counter;
+    cl_uint sample_counter;
     
     cl_GLuint texture_ID;
     
     cl::Kernel trace_kernel, retrace_kernel, scene_kernel;
     cl::ImageGL image;
-    cl::Buffer scene_buffer, random_buffer, camera_buffer, vertex_buffer, index_buffer, mesh_buffer;
+    cl::Buffer scene_buffer, random_buffer, camera_buffer, vertex_buffer, index_buffer, mesh_buffer, model_buffer;
     size_t image_size, buff_size;
     
     void createGLTextures();

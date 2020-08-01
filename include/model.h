@@ -35,8 +35,9 @@ struct Mesh {
 struct Model {
     cl_uint mesh_anchor;
     cl_uint mesh_count;
+    cl_uint mat_ID;
     
-    Model(cl_uint mesh_anchor, cl_uint mesh_count) : mesh_anchor(mesh_anchor), mesh_count(mesh_count) {}
+    Model(cl_uint mesh_anchor, cl_uint mesh_count, cl_uint mat_ID) : mesh_anchor(mesh_anchor), mesh_count(mesh_count), mat_ID(mat_ID) {}
 };
 
 class ModelLoader {
@@ -51,7 +52,7 @@ private:
     cl_uint processNode(aiNode* node, const aiScene* scene);
     Mesh processMesh(aiMesh* mesh, const aiScene* scene);
 public:
-    void loadModel(std::string path);
+    void loadModel(std::string path, cl_uint mat_ID);
     
     inline cl_float3* getVertices() { return &(vertices[0]); }
     inline cl_uint* getIndices() { return &(indices[0]); }

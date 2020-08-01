@@ -80,7 +80,7 @@ int main(int argc, const char * argv[]) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
         processInput(window, delta_time);
-        ray_tracer->setTime(current_time);
+        //ray_tracer->setTime(current_time);
         
         if(run) {
             if(lag >= MIN_FRAME_TIME) {
