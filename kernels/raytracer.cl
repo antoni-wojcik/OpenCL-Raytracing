@@ -3,11 +3,6 @@
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
 #define DEPTH 10
-#define NUM_MATERIALS 8
-#define NUM_SPHERES 7
-#define NUM_PLANES 1
-#define NUM_LENSES 1
-#define NUM_MODELS 1
 
 #define RANDOM_BUFFER_SIZE 100000
 
@@ -34,19 +29,19 @@ typedef struct {
     float t;
     vec3 p;
     vec3 normal;
-    __global const Material* mat;
+    uint mat_ID;
 } HPI; //HitPointInfo
 
 typedef struct {
     vec3 pos;
     float r;
-    __global const Material* mat;
+    uint mat_ID;
 } Sphere;
 
 typedef struct {
     vec3 pos;
     vec3 normal;
-    __global const Material* mat;
+    uint mat_ID;
 } Plane;
 
 typedef struct {
@@ -55,10 +50,10 @@ typedef struct {
     vec3 p2;
     float r1;
     float r2;
-    __global const Material* mat;
+    uint mat_ID;
 } Lens;
 
-inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __global const Material* mat) {
+inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, uint mat_ID) {
     //if(r1 < h && r2 < h) abort();
     Lens lens;
     lens.pos = pos;
@@ -66,7 +61,7 @@ inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, __glo
     lens.p2 = pos - normal * sqrt(r2 * r2 - h * h);
     lens.r1 = r1;
     lens.r2 = r2;
-    lens.mat = mat;
+    lens.mat_ID = mat_ID;
     
     return lens;
 }
@@ -83,23 +78,21 @@ typedef struct {
 } Model;
 
 typedef struct {
+    __global const Material* materials;
+    
+    __global const Sphere* spheres;
+    __global const Plane* planes;
+    __global const Lens* lenses;
+    
     __global const vec3* vertex_buffer;
     __global const uint* index_buffer;
     __global const Mesh* mesh_buffer;
-    __global const Model* model_buffer;
-    
-    uint material_count;
+    __global const Model* models;
 
-    uint model_count;
     uint sphere_count;
     uint plane_count;
     uint lens_count;
-    
-    Material materials[NUM_MATERIALS];
-    
-    Sphere spheres[NUM_SPHERES];
-    Plane planes[NUM_PLANES];
-    Lens lenses[NUM_LENSES];
+    uint model_count;
 } Scene;
 
 inline __global vec3* getMeshVertex(__global const Scene* scene, __global const Mesh* mesh, uint i) {
@@ -158,7 +151,7 @@ bool hitSphere(const Ray* r, __global const Sphere* s, HPI* hpi) {
             hpi->t = temp;
             hpi->p = rayPointAtParam(r, temp);
             hpi->normal = (hpi->p - s->pos) / s->r; // FIXME: ?? NORMALIZE
-            hpi->mat = s->mat;
+            hpi->mat_ID = s->mat_ID;
             return true;
         }
         temp = b + d;
@@ -166,7 +159,7 @@ bool hitSphere(const Ray* r, __global const Sphere* s, HPI* hpi) {
             hpi->t = temp;
             hpi->p = rayPointAtParam(r, temp);
             hpi->normal = (hpi->p - s->pos) / s->r; // FIXME: ?? NORMALIZE
-            hpi->mat = s->mat;
+            hpi->mat_ID = s->mat_ID;
             return true;
         }
     }
@@ -185,7 +178,7 @@ bool hitPlane(const Ray* r, __global const Plane* p, HPI* hpi) {
         hpi->t = temp;
         hpi->p = rayPointAtParam(r, temp);
         hpi->normal = -p->normal * sign(a); //!!!!!!
-        hpi->mat = p->mat;
+        hpi->mat_ID = p->mat_ID;
         
         return true;
     }
@@ -246,7 +239,7 @@ bool hitLens(const Ray* r, __global const Lens* lens, HPI* hpi) {
             hpi->t = temp;
             hpi->p = rayPointAtParam(r, temp);
             hpi->normal = (hpi->p - *s) / rad; // FIXME: ?? NORMALIZE
-            hpi->mat = lens->mat;
+            hpi->mat_ID = lens->mat_ID;
             return true;
         }
     }
@@ -288,7 +281,7 @@ bool hitMeshOut(const Ray* r, __global const Scene* scene, __global const Model*
     for(uint i = 0; i < mesh->face_count; i++) {
         if(hitTriangle(r, getMeshVertex(scene, mesh, 3 * i), getMeshVertex(scene, mesh, 3 * i + 1), getMeshVertex(scene, mesh, 3 * i + 2), hpi)) {
             if(dot(hpi->normal, r->dir) < 0.0f) {
-                hpi->mat = getMaterial(scene, model->mat_ID);
+                hpi->mat_ID = model->mat_ID;
                 return true;
             }
         }
@@ -318,7 +311,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
     float hit_min = MAX_DISTANCE;
     HPI hpi_result;
     
-    for(uint i = 0; i < NUM_SPHERES; i++) {
+    for(uint i = 0; i < scene->sphere_count; i++) {
         if(hitSphere(r, scene->spheres + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
@@ -326,7 +319,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(uint i = 0; i < NUM_PLANES; i++) {
+    for(uint i = 0; i < scene->plane_count; i++) {
         if(hitPlane(r, scene->planes + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
@@ -334,7 +327,7 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(uint i = 0; i < NUM_LENSES; i++) {
+    for(uint i = 0; i < scene->lens_count; i++) {
         if(hitLens(r, scene->lenses + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
@@ -342,8 +335,8 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
         }
     }
     
-    for(uint i = 0; i < NUM_MODELS; i++) {
-        if(hitModel(r, scene, scene->model_buffer + i, &hpi_result) && hpi_result.t < hit_min) {
+    for(uint i = 0; i < scene->model_count; i++) {
+        if(hitModel(r, scene, scene->models + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
             hit_min = hpi_result.t;
@@ -353,24 +346,24 @@ bool hitScene(const Ray* r, __global const Scene* scene, HPI* hpi) {
     return hit_any;
 }
 
-void rayReflect(Ray* r, col* c, const HPI* hpi) {
+void rayReflect(Ray* r, col* c, const HPI* hpi, __global const Scene* scene) {
     r->origin = hpi->p;
     r->dir = normalize(r->dir - 2.0f * dot(r->dir, hpi->normal) * hpi->normal);
     
-    if(hpi->mat->type == t_reflective) (*c) *= hpi->mat->extra_data;
+    if(getMaterial(scene, hpi->mat_ID)->type == t_reflective) (*c) *= getMaterial(scene, hpi->mat_ID)->extra_data;
 }
 
-void rayRefract(Ray* r, col* c, HPI* hpi) {
+void rayRefract(Ray* r, col* c, HPI* hpi, __global const Scene* scene) {
     vec3 normal;
     float idx_ratio;
     float cai = dot(r->dir, hpi->normal); //cos_angle_incident
     if(cai > 0) {
         normal = -hpi->normal;
-        idx_ratio = hpi->mat->extra_data;
+        idx_ratio = getMaterial(scene, hpi->mat_ID)->extra_data;
         cai = -cai;
     } else {
         normal = hpi->normal;
-        idx_ratio = 1.0f / hpi->mat->extra_data;
+        idx_ratio = 1.0f / getMaterial(scene, hpi->mat_ID)->extra_data;
     }
 
     float discriminant = 1.0f - idx_ratio * idx_ratio * (1.0f - cai * cai);
@@ -380,16 +373,16 @@ void rayRefract(Ray* r, col* c, HPI* hpi) {
         r->dir = idx_ratio * r->dir - normal * (idx_ratio * cai + sqrt(discriminant));
     } else {
         hpi->normal = normal;
-        rayReflect(r, c, hpi);
+        rayReflect(r, c, hpi, scene);
     }
 }
 
-void rayScatter(Ray* r, col* c, const HPI* hpi, __global const float* random_buffer, uint s_seed) {
+void rayScatter(Ray* r, col* c, const HPI* hpi, __global const float* random_buffer, uint s_seed, __global const Scene* scene) {
     vec3 random_in_sphere = randomVec(random_buffer, r, s_seed);
     r->dir = normalize(hpi->normal + random_in_sphere);
     r->origin = hpi->p;
     
-    (*c) *= hpi->mat->extra_data;
+    (*c) *= getMaterial(scene, hpi->mat_ID)->extra_data;
 }
 
 float schlick(float cai, float idx_ratio) {
@@ -398,17 +391,17 @@ float schlick(float cai, float idx_ratio) {
     return r0 + (1.0f - r0) * pow((1.0f - cai), 5);
 }
 
-void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random_buffer, uint s_seed) {
+void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random_buffer, uint s_seed, __global const Scene* scene) {
     vec3 normal;
     float idx_ratio;
     float cai = dot(r->dir, hpi->normal); //cos_angle_incident
     if(cai > 0) {
         normal = -hpi->normal;
-        idx_ratio = hpi->mat->extra_data;
+        idx_ratio = getMaterial(scene, hpi->mat_ID)->extra_data;
         cai = -cai;
     } else {
         normal = hpi->normal;
-        idx_ratio = 1.0f / hpi->mat->extra_data;
+        idx_ratio = 1.0f / getMaterial(scene, hpi->mat_ID)->extra_data;
     }
     
     float reflect_prob = schlick(-cai, idx_ratio);
@@ -425,7 +418,7 @@ void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random
     }
     
     hpi->normal = normal;
-    rayReflect(r, c, hpi);
+    rayReflect(r, c, hpi, scene);
 }
 
 inline col bkgCol(const Ray *r) {
@@ -443,25 +436,25 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
             out = (col)(0.0f);//min(out, bkgCol(r));
             break;
         } else {
-            switch(hpi.mat->type) {
+            switch(getMaterial(scene, hpi.mat_ID)->type) {
                 case t_diffuse:
-                    rayScatter(r, &out, &hpi, random_buffer, i + sample);
+                    rayScatter(r, &out, &hpi, random_buffer, i + sample, scene);
                     break;
                 case t_light:
                     i = DEPTH;
                     break;
                 case t_reflective:
-                    rayReflect(r, &out, &hpi);
+                    rayReflect(r, &out, &hpi, scene);
                     break;
                 case t_refractive:
-                    rayRefract(r, &out, &hpi);
+                    rayRefract(r, &out, &hpi, scene);
                     break;
                 case t_dielectric:
-                    rayRefractDielectric(r, &out, &hpi, random_buffer, i + sample);
+                    rayRefractDielectric(r, &out, &hpi, random_buffer, i + sample, scene);
                     break;
             }
             
-            out = min(out, hpi.mat->color); // mix colors
+            out = min(out, getMaterial(scene, hpi.mat_ID)->color); // mix colors
         }
     }
     
@@ -514,28 +507,27 @@ __kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t ima
     write_imagef(image_out, loc, (float4)(gamma_corr(&out), 1.0f));
 }
 
-__kernel void createScene(__global Scene* scene, __global const vec3* vertex_buffer, __global const uint* index_buffer, __global const Mesh* mesh_buffer, __global const Model* model_buffer) {
+typedef struct {
+    uint sphere_count;
+    uint plane_count;
+    uint lens_count;
+    uint model_count;
+} ObjectCounter;
+
+__kernel void createScene(__global Scene* scene, __global const Material* materials, __global const Sphere* sphere_buffer, __global const Plane* plane_buffer, __global const Lens* lens_buffer, __global const vec3* vertex_buffer, __global const uint* index_buffer, __global const Mesh* mesh_buffer, __global const Model* model_buffer, const ObjectCounter obj_counter) {
+    scene->materials = materials;
+    
+    scene->spheres = sphere_buffer;
+    scene->planes = plane_buffer;
+    scene->lenses = lens_buffer;
+    
     scene->vertex_buffer = vertex_buffer;
     scene->index_buffer = index_buffer;
     scene->mesh_buffer = mesh_buffer;
-    scene->model_buffer = model_buffer;
+    scene->models = model_buffer;
     
-    scene->materials[0] = (Material){t_reflective, (col)(1.0f), 0.8f};
-    scene->materials[1] = (Material){t_refractive, (col)(1.0f, 1.0f, 1.0f), 1.1f};
-    scene->materials[2] = (Material){t_refractive, (col)(1.0f), 2.0f};
-    scene->materials[3] = (Material){t_diffuse, (col)(1.0f, 0.0f, 0.0f), 0.5f};
-    scene->materials[4] = (Material){t_diffuse, (col)(0.0f, 1.0f, 0.0f), 0.5f};
-    scene->materials[5] = (Material){t_dielectric, (col)(1.0f), 1.3f};
-    scene->materials[6] = (Material){t_light, (col)(1.0f), 0.0f};
-    scene->materials[7] = (Material){t_diffuse, (col)(1.0f), 1.0f};
-    
-    scene->spheres[0] = (Sphere){(vec3)(0.0f, 0.0f, 3.0f), 1.5f, getMaterial(scene, 0)};
-    scene->spheres[1] = (Sphere){(vec3)(0.0f, 0.0f, -3.0f), 1.0f, getMaterial(scene, 0)};
-    scene->spheres[2] = (Sphere){(vec3)(0.0f, 3.0f, 0.0f), 1.0f, getMaterial(scene, 1)};
-    scene->spheres[3] = (Sphere){(vec3)(-0.02f, -3.0f, 0.0f), 1.0f, getMaterial(scene, 3)};
-    scene->spheres[4] = (Sphere){(vec3)(2.02f, -3.0f, 0.0f), 1.0f, getMaterial(scene, 4)};
-    scene->spheres[5] = (Sphere){(vec3)(1.0f, -200.0f, 0.0f), 100.0f, getMaterial(scene, 6)};
-    scene->spheres[6] = (Sphere){(vec3)(-3.0f, 0.0f, 0.0f), 1.0f, getMaterial(scene, 5)};
-    scene->planes[0] = (Plane){(vec3)(0.0f, 5.0f, 0.0f), (vec3)(0.0f, 1.0f, 0.0f), getMaterial(scene, 7)};
-    scene->lenses[0] = createLens((vec3)(5.0f, 0.0f, 0.0f), (vec3)(1.0f, 0.0f, 0.0f), 10.0f, 10.0f, 2.0f, getMaterial(scene, 2));
+    scene->sphere_count = obj_counter.sphere_count;
+    scene->plane_count = obj_counter.plane_count;
+    scene->lens_count = obj_counter.lens_count;
+    scene->model_count = obj_counter.model_count;
 }

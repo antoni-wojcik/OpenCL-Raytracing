@@ -96,7 +96,27 @@ void RayTracer::createCLBuffers() {
     delete [] random_data;
     
     // load models
+    scene.addMaterial(t_reflective, (cl_float3){1.0f, 1.0f, 1.0f}, 0.8f);
+    scene.addMaterial(t_refractive, (cl_float3){1.0f, 1.0f, 1.0f}, 1.1f);
+    scene.addMaterial(t_refractive, (cl_float3){1.0f, 1.0f, 1.0f}, 2.0f);
+    scene.addMaterial(t_diffuse, (cl_float3){1.0f, 0.0f, 0.0f}, 0.5f);
+    scene.addMaterial(t_diffuse, (cl_float3){0.0f, 1.0f, 0.0f}, 0.5f);
+    scene.addMaterial(t_dielectric, (cl_float3){1.0f, 1.0f, 1.0f}, 1.3f);
+    scene.addMaterial(t_light, (cl_float3){1.0f, 1.0f, 1.0f}, 0.0f);
+    scene.addMaterial(t_diffuse, (cl_float3){1.0f, 1.0f, 1.0f}, 1.0f);
+    
+    scene.addSphere((cl_float3){0.0f, 0.0f, 3.0f}, 1.5f, 0);
+    scene.addSphere((cl_float3){0.0f, 0.0f, -3.0f}, 1.0f, 0);
+    scene.addSphere((cl_float3){0.0f, 3.0f, 0.0f}, 1.0f, 1);
+    scene.addSphere((cl_float3){-0.02f, -3.0f, 0.0f}, 1.0f, 3);
+    scene.addSphere((cl_float3){2.02f, -3.0f, 0.0f}, 1.0f, 4);
+    scene.addSphere((cl_float3){1.0f, -200.0f, 0.0f}, 100.0f, 6);
+    scene.addSphere((cl_float3){-3.0f, 0.0f, 0.0f}, 1.0f, 5);
+    scene.addPlane((cl_float3){0.0f, 5.0f, 0.0f}, (cl_float3){0.0f, 1.0f, 0.0f}, 7);
+    scene.addLens((cl_float3){5.0f, 0.0f, 0.0f}, (cl_float3){1.0f, 0.0f, 0.0f}, 10.0f, 10.0f, 2.0f, 2);
+    
     scene.loadModel("assets/cube/cube.obj", 0);
+    
     scene.setupBuffers(context);
 }
 

@@ -4,8 +4,8 @@
 
 ## TODO
 
-1. Add cuboids
-2. Add triangle mesh
-3. New materials: metal, fog, jelly (diffuse + dielectric)
-4. Add textures
+1. Add internal mesh-ray intersection
+2. Add cuboids
+3. Add textures
+4. New materials: metal, fog, jelly (diffuse + dielectric)
 5. Spatial partitioning

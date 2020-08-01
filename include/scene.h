@@ -25,6 +25,41 @@
 #include "cl2.hpp"
 #include "opencl_error.h"
 
+enum MatType { t_refractive, t_reflective, t_dielectric, t_diffuse, t_light };
+
+struct Material {
+    MatType type;
+    cl_float3 color;
+    cl_float extra_data; // refractive index etc
+    
+    Material(MatType type, const cl_float3& color, cl_float extra_data) : type(type), color(color), extra_data(extra_data) {}
+};
+
+struct Sphere {
+    cl_float3 pos;
+    cl_float r;
+    cl_uint mat_ID;
+    
+    Sphere(const cl_float3& pos, cl_float r, cl_uint mat_ID) : pos(pos), r(r), mat_ID(mat_ID) {}
+};
+
+struct Plane {
+    cl_float3 pos;
+    cl_float3 normal;
+    cl_uint mat_ID;
+    
+    Plane(const cl_float3& pos, const cl_float3& normal, cl_uint mat_ID) : pos(pos), normal(normal), mat_ID(mat_ID) {}
+};
+
+struct Lens {
+    cl_float3 pos; // pos of the centre
+    cl_float3 p1; // both curvatures
+    cl_float3 p2;
+    cl_float r1;
+    cl_float r2;
+    cl_uint mat_ID;
+};
+
 struct Mesh {
     cl_uint index_anchor;
     cl_uint face_count;
@@ -43,24 +78,41 @@ struct Model {
 class SceneCreator {
 private:
     cl::Kernel scene_kernel;
+    
     cl::Buffer scene_buffer;
+    cl::Buffer material_buffer;
+    cl::Buffer sphere_buffer, plane_buffer, lens_buffer;
     cl::Buffer vertex_buffer, index_buffer, mesh_buffer, model_buffer;
     
-    Assimp::Importer importer;
+    std::vector<Material> materials;
+    
+    std::vector<Sphere> spheres;
+    std::vector<Plane> planes;
+    std::vector<Lens> lenses;
     
     std::vector<cl_float3> vertices;
     std::vector<cl_uint> indices;
     std::vector<Mesh> meshes;
     std::vector<Model> models;
     
+    Assimp::Importer importer;
+    
     cl_uint processNode(aiNode* node, const aiScene* scene);
     Mesh processMesh(aiMesh* mesh, const aiScene* scene);
     
+    inline Material* getMaterials() { return &(materials[0]); }
+    inline Sphere* getSpheres() { return &(spheres[0]); }
+    inline Plane* getPlanes() { return &(planes[0]); }
+    inline Lens* getLenses() { return &(lenses[0]); }
     inline cl_float3* getVertices() { return &(vertices[0]); }
     inline cl_uint* getIndices() { return &(indices[0]); }
     inline Mesh* getMeshes() { return &(meshes[0]); }
     inline Model* getModels() { return &(models[0]); }
     
+    inline size_t getMaterialSize() { return sizeof(Material) * materials.size(); }
+    inline size_t getSphereSize() { return sizeof(Sphere) * spheres.size(); }
+    inline size_t getPlaneSize() { return sizeof(Plane) * planes.size(); }
+    inline size_t getLensSize() { return sizeof(Lens) * lenses.size(); }
     inline size_t getVertexSize() { return sizeof(cl_float3) * vertices.size(); }
     inline size_t getIndexSize() { return sizeof(cl_uint) * indices.size(); }
     inline size_t getMeshSize() { return sizeof(Mesh) * meshes.size(); }
@@ -72,6 +124,11 @@ public:
     void setKernelArgs();
     void createScene(cl::Context& context, cl::Device& device);
     
+    void addMaterial(MatType type, const cl_float3& color, cl_float extra_data);
+    
+    void addSphere(const cl_float3& pos, cl_float r, cl_uint mat_ID);
+    void addPlane(const cl_float3& pos, const cl_float3& normal, cl_uint mat_ID);
+    void addLens(const cl_float3& pos, const cl_float3& normal, cl_float r1, cl_float r2, cl_float h, uint mat_ID);
     void loadModel(const std::string& path, cl_uint mat_ID);
     
     inline const cl::Buffer& getBuffer() { return scene_buffer; }
