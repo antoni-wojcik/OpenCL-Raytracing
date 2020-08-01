@@ -1,5 +1,5 @@
 //
-//  model.cpp
+//  scene.cpp
 //  Non Euclidean
 //
 //  Created by Antoni Wójcik on 31/07/2020.
@@ -7,9 +7,41 @@
 //
 
 #include <stdio.h>
-#include "model.h"
+#include "scene.h"
 
-void ModelLoader::loadModel(std::string path, cl_uint mat_ID) {
+void SceneCreator::setupBuffers(cl::Context& context) {
+    scene_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_mem));
+    
+    vertex_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getVertexSize());
+    index_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getIndexSize());
+    mesh_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getMeshSize());
+    model_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getModelSize());
+}
+
+void SceneCreator::createKernel(cl::Program& program, const char* name) {
+    scene_kernel = cl::Kernel(program, name);
+}
+
+void SceneCreator::createScene(cl::Context& context, cl::Device& device) {
+    cl::CommandQueue queue(context, device);
+    queue.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, getVertexSize(), getVertices());
+    queue.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, getIndexSize(), getIndices());
+    queue.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, getMeshSize(), getMeshes());
+    queue.enqueueWriteBuffer(model_buffer, CL_TRUE, 0, getModelSize(), getModels());
+    
+    queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
+    queue.finish();
+}
+
+void SceneCreator::setKernelArgs() {
+    scene_kernel.setArg(0, scene_buffer);
+    scene_kernel.setArg(1, vertex_buffer);
+    scene_kernel.setArg(2, index_buffer);
+    scene_kernel.setArg(3, mesh_buffer);
+    scene_kernel.setArg(4, model_buffer);
+}
+
+void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID) {
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
     
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
@@ -25,7 +57,7 @@ void ModelLoader::loadModel(std::string path, cl_uint mat_ID) {
     mesh_count_total += mesh_count;
 }
 
-cl_uint ModelLoader::processNode(aiNode* node, const aiScene* scene) {
+cl_uint SceneCreator::processNode(aiNode* node, const aiScene* scene) {
     cl_uint mesh_count = 0;
     
     for(unsigned int i = 0; i < node->mNumMeshes; i++) {
@@ -42,7 +74,7 @@ cl_uint ModelLoader::processNode(aiNode* node, const aiScene* scene) {
     return mesh_count;
 }
 
-Mesh ModelLoader::processMesh(aiMesh* mesh, const aiScene* scene) {
+Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene) {
     cl_uint index_anchor = (cl_uint)indices.size();
     cl_uint face_count = 0;
     

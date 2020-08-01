@@ -1,13 +1,13 @@
 //
-//  model.h
+//  scene.h
 //  Non Euclidean
 //
 //  Created by Antoni Wójcik on 31/07/2020.
 //  Copyright © 2020 Antoni Wójcik. All rights reserved.
 //
 
-#ifndef model_h
-#define model_h
+#ifndef scene_h
+#define scene_h
 
 #include <string>
 #include <vector>
@@ -40,8 +40,12 @@ struct Model {
     Model(cl_uint mesh_anchor, cl_uint mesh_count, cl_uint mat_ID) : mesh_anchor(mesh_anchor), mesh_count(mesh_count), mat_ID(mat_ID) {}
 };
 
-class ModelLoader {
+class SceneCreator {
 private:
+    cl::Kernel scene_kernel;
+    cl::Buffer scene_buffer;
+    cl::Buffer vertex_buffer, index_buffer, mesh_buffer, model_buffer;
+    
     Assimp::Importer importer;
     
     std::vector<cl_float3> vertices;
@@ -51,8 +55,6 @@ private:
     
     cl_uint processNode(aiNode* node, const aiScene* scene);
     Mesh processMesh(aiMesh* mesh, const aiScene* scene);
-public:
-    void loadModel(std::string path, cl_uint mat_ID);
     
     inline cl_float3* getVertices() { return &(vertices[0]); }
     inline cl_uint* getIndices() { return &(indices[0]); }
@@ -63,6 +65,16 @@ public:
     inline size_t getIndexSize() { return sizeof(cl_uint) * indices.size(); }
     inline size_t getMeshSize() { return sizeof(Mesh) * meshes.size(); }
     inline size_t getModelSize() { return sizeof(Model) * models.size(); }
+    
+public:
+    void createKernel(cl::Program& program, const char* name);
+    void setupBuffers(cl::Context& context);
+    void setKernelArgs();
+    void createScene(cl::Context& context, cl::Device& device);
+    
+    void loadModel(const std::string& path, cl_uint mat_ID);
+    
+    inline const cl::Buffer& getBuffer() { return scene_buffer; }
 };
 
-#endif /* model_h */
+#endif /* scene_h */

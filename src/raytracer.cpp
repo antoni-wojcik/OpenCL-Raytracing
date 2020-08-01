@@ -26,6 +26,8 @@ RayTracer::RayTracer(int w, int h, const char* kernel_path) : KernelGL(kernel_pa
         createGLBuffers();
         createCLBuffers();
         setKernelArgs();
+        
+        scene.createScene(context, device);
     } catch(cl::Error e) {
         processError(e);
     }
@@ -60,7 +62,6 @@ void RayTracer::createGLBuffers() {
 void RayTracer::createCLBuffers() {
     buff_size = 12 * sizeof(cl_float);
     camera_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, buff_size);
-    scene_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_mem));
     
     // create the buffer of random vectors in an unit sphere
     
@@ -95,47 +96,27 @@ void RayTracer::createCLBuffers() {
     delete [] random_data;
     
     // load models
-    ModelLoader ml;
-    ml.loadModel("assets/cube/cube.obj", 0);
-    
-    //cl::Buffer model_buffer;
-    
-    vertex_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getVertexSize());
-    index_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getIndexSize());
-    mesh_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getMeshSize());
-    model_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, ml.getModelSize());
-    
-    //scene_kernel.setArg(4, model_buffer);
-    
-    cl::CommandQueue queue2(context, device);
-    queue2.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, ml.getVertexSize(), ml.getVertices());
-    queue2.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, ml.getIndexSize(), ml.getIndices());
-    queue2.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, ml.getMeshSize(), ml.getMeshes());
-    queue2.enqueueWriteBuffer(model_buffer, CL_TRUE, 0, ml.getModelSize(), ml.getModels());
-    queue2.finish();
+    scene.loadModel("assets/cube/cube.obj", 0);
+    scene.setupBuffers(context);
 }
 
 void RayTracer::createKernels() {
     trace_kernel = cl::Kernel(program, TRACE_KERNEL_NAME);
     retrace_kernel = cl::Kernel(program, RETRACE_KERNEL_NAME);
-    scene_kernel = cl::Kernel(program, SCENE_KERNEL_NAME);
+    scene.createKernel(program, SCENE_KERNEL_NAME);
 }
 
 void RayTracer::setKernelArgs() {
     trace_kernel.setArg(0, image);
     trace_kernel.setArg(1, camera_buffer);
     trace_kernel.setArg(2, random_buffer);
-    trace_kernel.setArg(3, scene_buffer);
+    trace_kernel.setArg(3, scene.getBuffer());
     retrace_kernel.setArg(0, image);
     retrace_kernel.setArg(1, image);
     retrace_kernel.setArg(2, camera_buffer);
     retrace_kernel.setArg(3, random_buffer);
-    retrace_kernel.setArg(4, scene_buffer);
-    scene_kernel.setArg(0, scene_buffer);
-    scene_kernel.setArg(1, vertex_buffer);
-    scene_kernel.setArg(2, index_buffer);
-    scene_kernel.setArg(3, mesh_buffer);
-    scene_kernel.setArg(4, model_buffer);
+    retrace_kernel.setArg(4, scene.getBuffer());
+    scene.setKernelArgs();
 }
 
 /*void RayTracer::setTime(float time) {
@@ -148,9 +129,10 @@ void RayTracer::render(const Camera* camera) {
     try {
         std::vector<cl::Memory> mem_objs;
         mem_objs.push_back(image);
+        
+        scene.createScene(context, device);
     
         cl::CommandQueue queue(context, device);
-        queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
         queue.enqueueAcquireGLObjects(&mem_objs);
         queue.enqueueWriteBuffer(camera_buffer, CL_TRUE, 0, buff_size, camera->transferData());
         queue.enqueueNDRangeKernel(trace_kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);

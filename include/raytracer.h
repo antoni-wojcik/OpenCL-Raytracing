@@ -12,7 +12,7 @@
 #include "kernelgl.h"
 #include "glm.hpp"
 #include "screen.h"
-#include "model.h"
+#include "scene.h"
 
 class RayTracer : KernelGL {
 private:
@@ -22,10 +22,12 @@ private:
     
     cl_GLuint texture_ID;
     
-    cl::Kernel trace_kernel, retrace_kernel, scene_kernel;
+    cl::Kernel trace_kernel, retrace_kernel;
     cl::ImageGL image;
-    cl::Buffer scene_buffer, random_buffer, camera_buffer, vertex_buffer, index_buffer, mesh_buffer, model_buffer;
+    cl::Buffer scene_buffer, random_buffer, camera_buffer;
     size_t image_size, buff_size;
+    
+    SceneCreator scene;
     
     void createGLTextures();
     void createGLBuffers();
