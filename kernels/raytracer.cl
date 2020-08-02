@@ -53,22 +53,10 @@ typedef struct {
     uint mat_ID;
 } Lens;
 
-inline Lens createLens(vec3 pos, vec3 normal, float r1, float r2, float h, uint mat_ID) {
-    //if(r1 < h && r2 < h) abort();
-    Lens lens;
-    lens.pos = pos;
-    lens.p1 = pos + normal * sqrt(r1 * r1 - h * h);
-    lens.p2 = pos - normal * sqrt(r2 * r2 - h * h);
-    lens.r1 = r1;
-    lens.r2 = r2;
-    lens.mat_ID = mat_ID;
-    
-    return lens;
-}
-
 typedef struct {
     uint index_anchor;
     uint face_count;
+    uint texture_ID;
 } Mesh;
 
 typedef struct {
@@ -95,7 +83,7 @@ typedef struct {
     uint model_count;
 } Scene;
 
-inline __global vec3* getMeshVertex(__global const Scene* scene, __global const Mesh* mesh, uint i) {
+inline __global const vec3* getMeshVertex(__global const Scene* scene, __global const Mesh* mesh, uint i) {
     return scene->vertex_buffer + scene->index_buffer[mesh->index_anchor + i];
 }
 

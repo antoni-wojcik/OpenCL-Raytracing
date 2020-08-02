@@ -13,6 +13,8 @@
 #include <random>
 #include <cmath>
 
+#include "gtc/matrix_transform.hpp"
+
 #define TRACE_KERNEL_NAME "trace"
 #define RETRACE_KERNEL_NAME "retrace"
 #define SCENE_KERNEL_NAME "createScene"
@@ -115,7 +117,11 @@ void RayTracer::createCLBuffers() {
     scene.addPlane((cl_float3){0.0f, 5.0f, 0.0f}, (cl_float3){0.0f, 1.0f, 0.0f}, 7);
     scene.addLens((cl_float3){5.0f, 0.0f, 0.0f}, (cl_float3){1.0f, 0.0f, 0.0f}, 10.0f, 10.0f, 2.0f, 2);
     
-    scene.loadModel("assets/cube/cube.obj", 0);
+    glm::mat4 model(1.0f);
+    model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    //model = glm::translate(model, glm::vec3(0.0f, 5.0f, 0.0f));
+    
+    scene.loadModel("assets/cube/cube.obj", 0, model);
     
     scene.setupBuffers(context);
 }
@@ -150,8 +156,6 @@ void RayTracer::render(const Camera* camera) {
         std::vector<cl::Memory> mem_objs;
         mem_objs.push_back(image);
         
-        scene.createScene(context, device);
-    
         cl::CommandQueue queue(context, device);
         queue.enqueueAcquireGLObjects(&mem_objs);
         queue.enqueueWriteBuffer(camera_buffer, CL_TRUE, 0, buff_size, camera->transferData());
@@ -174,7 +178,6 @@ void RayTracer::renderAgain(const Camera* camera) {
         mem_objs.push_back(image);
         
         cl::CommandQueue queue(context, device);
-        //queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
         queue.enqueueAcquireGLObjects(&mem_objs);
         queue.enqueueWriteBuffer(camera_buffer, CL_TRUE, 0, buff_size, camera->transferData());
         queue.enqueueNDRangeKernel(retrace_kernel, cl::NullRange, cl::NDRange(size_t(width), size_t(height)), cl::NullRange);

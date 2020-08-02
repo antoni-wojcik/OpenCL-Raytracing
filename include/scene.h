@@ -13,6 +13,8 @@
 #include <vector>
 #include <iostream>
 
+#include "glm.hpp"
+
 // include the Assimp library
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -63,8 +65,9 @@ struct Lens {
 struct Mesh {
     cl_uint index_anchor;
     cl_uint face_count;
+    cl_uint texture_ID;
     
-    Mesh(cl_uint index_anchor, cl_uint face_count) : index_anchor(index_anchor), face_count(face_count) {}
+    Mesh(cl_uint index_anchor, cl_uint face_count, cl_uint texture_ID) : index_anchor(index_anchor), face_count(face_count), texture_ID(texture_ID) {}
 };
 
 struct Model {
@@ -83,22 +86,24 @@ private:
     cl::Buffer material_buffer;
     cl::Buffer sphere_buffer, plane_buffer, lens_buffer;
     cl::Buffer vertex_buffer, index_buffer, mesh_buffer, model_buffer;
+    cl::Image2DArray texture_buffer;
     
     std::vector<Material> materials;
     
     std::vector<Sphere> spheres;
     std::vector<Plane> planes;
     std::vector<Lens> lenses;
+    std::vector<Model> models;
     
     std::vector<cl_float3> vertices;
+    std::vector<cl_float2> uv;
     std::vector<cl_uint> indices;
     std::vector<Mesh> meshes;
-    std::vector<Model> models;
     
     Assimp::Importer importer;
     
-    cl_uint processNode(aiNode* node, const aiScene* scene);
-    Mesh processMesh(aiMesh* mesh, const aiScene* scene);
+    cl_uint processNode(aiNode* node, const aiScene* scene, const glm::mat4& transform);
+    Mesh processMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& transform);
     
     inline Material* getMaterials() { return &(materials[0]); }
     inline Sphere* getSpheres() { return &(spheres[0]); }
@@ -129,7 +134,7 @@ public:
     void addSphere(const cl_float3& pos, cl_float r, cl_uint mat_ID);
     void addPlane(const cl_float3& pos, const cl_float3& normal, cl_uint mat_ID);
     void addLens(const cl_float3& pos, const cl_float3& normal, cl_float r1, cl_float r2, cl_float h, uint mat_ID);
-    void loadModel(const std::string& path, cl_uint mat_ID);
+    void loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform = glm::mat4(1.0f));
     
     inline const cl::Buffer& getBuffer() { return scene_buffer; }
 };

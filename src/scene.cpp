@@ -10,6 +10,8 @@
 #include <cmath>
 #include "scene.h"
 
+//TODO: HANDLE "COUNT = 0" CASES
+
 struct ObjectCounter {
     cl_uint sphere_count;
     cl_uint plane_count;
@@ -108,7 +110,7 @@ void SceneCreator::addLens(const cl_float3& pos, const cl_float3& normal, cl_flo
     lenses.push_back(lens);
 }
 
-void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID) {
+void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform) {
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
     
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
@@ -118,38 +120,43 @@ void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID) {
     
     static cl_uint mesh_count_total = 0;
     
-    cl_uint mesh_count = processNode(scene->mRootNode, scene); // TODO: NOT SURE IF THE RESULT IS CORRECT
+    cl_uint mesh_count = processNode(scene->mRootNode, scene, transform); // TODO: NOT SURE IF THE RESULT IS CORRECT
     models.push_back((Model){mesh_count_total, mesh_count, mat_ID});
     
     mesh_count_total += mesh_count;
 }
 
-cl_uint SceneCreator::processNode(aiNode* node, const aiScene* scene) {
+cl_uint SceneCreator::processNode(aiNode* node, const aiScene* scene, const glm::mat4& transform) {
     cl_uint mesh_count = 0;
     
     for(unsigned int i = 0; i < node->mNumMeshes; i++) {
         mesh_count++;
         
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        meshes.push_back(processMesh(mesh, scene));
+        meshes.push_back(processMesh(mesh, scene, transform));
     }
     
     for(unsigned int i = 0; i < node->mNumChildren; i++) {
-        mesh_count += processNode(node->mChildren[i], scene);
+        mesh_count += processNode(node->mChildren[i], scene, transform);
     }
     
     return mesh_count;
 }
 
-Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene) {
+inline cl_float3 transformVertex(const aiVector3D& vertex, const glm::mat4& transform) {
+    cl_float3 temp;
+    temp.x = transform[0][0] * vertex.x + transform[1][0] * vertex.y + transform[2][0] * vertex.z + transform[3][0];
+    temp.y = transform[0][1] * vertex.x + transform[1][1] * vertex.y + transform[2][1] * vertex.z + transform[3][1];
+    temp.z = transform[0][2] * vertex.x + transform[1][2] * vertex.y + transform[2][2] * vertex.z + transform[3][2];
+    return temp;
+}
+
+Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& transform) {
     cl_uint index_anchor = (cl_uint)indices.size();
     cl_uint face_count = 0;
     
     for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
-        cl_float3 vertex;
-        vertex.x = mesh->mVertices[i].x;
-        vertex.y = mesh->mVertices[i].y;
-        vertex.z = mesh->mVertices[i].z;
+        cl_float3 vertex = transformVertex(mesh->mVertices[i], transform);
         
         vertices.push_back(vertex);
     }
@@ -161,5 +168,5 @@ Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene) {
         for(cl_uint j = 0; j < face.mNumIndices; j++) indices.push_back((cl_uint)face.mIndices[j]);
     }
     
-    return Mesh(index_anchor, face_count);
+    return Mesh(index_anchor, face_count, 0);
 }
