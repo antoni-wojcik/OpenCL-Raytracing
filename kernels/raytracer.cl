@@ -6,12 +6,13 @@
 
 #define RANDOM_BUFFER_SIZE 100000
 
+typedef float4 vec4;
 typedef float3 vec3;
 typedef float2 vec2;
 typedef float3 col;
 
 __constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
-__constant sampler_t texture_sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
+__constant sampler_t texture_sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_NONE | CLK_FILTER_LINEAR;
 
 typedef struct {
     vec3 origin; //starting location
@@ -32,6 +33,7 @@ typedef struct {
     vec3 p;
     vec3 normal;
     vec2 uv;
+    uint texture_ID;
     uint mat_ID;
 } HPI; //HitPointInfo
 
@@ -57,16 +59,18 @@ typedef struct {
 } Lens;
 
 typedef struct {
+    uint vertex_anchor;
     uint index_anchor;
     uint face_count;
     //uint texture_uv_anchor;
-    uint texture_ID;
+    //uint texture_ID;
 } Mesh;
 
 typedef struct {
     uint mesh_anchor;
     uint mesh_count;
     uint mat_ID;
+    uint texture_ID;
 } Model;
 
 typedef struct {
@@ -89,19 +93,19 @@ typedef struct {
 } Scene;
 
 inline __global const vec3* getMeshVertex(__global const Scene* scene, __global const Mesh* mesh, uint i) {
-    return scene->vertex_buffer + scene->index_buffer[mesh->index_anchor + i];
+    return mesh->vertex_anchor + scene->vertex_buffer + scene->index_buffer[mesh->index_anchor + i];
 }
 
 inline __global const vec2* getMeshUV(__global const Scene* scene, __global const Mesh* mesh, uint i) {
-    return scene->texture_uv_buffer + scene->index_buffer[mesh->index_anchor + i]; //FIXME: CHECK IF IT MAKES SENSE (sln: use a separate texture index buffer)
+    return mesh->vertex_anchor + scene->texture_uv_buffer + scene->index_buffer[mesh->index_anchor + i]; //FIXME: CHECK IF IT MAKES SENSE (sln: use a separate texture index buffer)
 }
 
-vec2 getTextureUV(__global const vec2* tex_A, __global const vec2* tex_B, __global const vec2* tex_C, float u, float v) {
-    return (*tex_A) * (1.0f - u - v) + (*tex_B) * u + (*tex_C) * v;
+inline vec2 getTextureUV(__global const Scene* scene, __global const Mesh* mesh, uint idx_A, uint idx_B, uint idx_C, float u, float v) {
+    return (*getMeshUV(scene, mesh, idx_A)) * (1.0f - u - v) + (*getMeshUV(scene, mesh, idx_B)) * u + (*getMeshUV(scene, mesh, idx_C)) * v;
 }
 
-inline const col getTextureCol(__read_only image2d_t texture, const vec2* loc) {
-    return read_imagef(texture, texture_sampler, *loc).xyz;
+inline const col getTextureCol(__read_only image2d_array_t texture, const vec2* loc, uint texture_ID) {
+    return read_imagef(texture, texture_sampler, (vec4)(*loc, texture_ID, 0)).xyz;
 }
 
 inline vec3 getVec(__global const float* buff, uint id) {
@@ -252,12 +256,12 @@ bool hitLens(const Ray* r, __global const Lens* lens, HPI* hpi) {
     return false;
 }
 
-bool hitTriangle(const Ray* r, __global const Scene* scene, __global const Mesh* mesh, uint idx_0, uint idx_1, uint idx_2, HPI* hpi) {
+bool hitTriangle(const Ray* r, __global const Scene* scene, __global const Mesh* mesh, uint idx_A, uint idx_B, uint idx_C, HPI* hpi) {
     // Moller-Trumbore algorithm
     
-    __global const vec3* A = getMeshVertex(scene, mesh, idx_0);
-    __global const vec3* B = getMeshVertex(scene, mesh, idx_1);
-    __global const vec3* C = getMeshVertex(scene, mesh, idx_2);
+    __global const vec3* A = getMeshVertex(scene, mesh, idx_A);
+    __global const vec3* B = getMeshVertex(scene, mesh, idx_B);
+    __global const vec3* C = getMeshVertex(scene, mesh, idx_C);
     
     vec3 edge1 = (*B) - (*A);
     vec3 edge2 = (*C) - (*A);
@@ -276,11 +280,7 @@ bool hitTriangle(const Ray* r, __global const Scene* scene, __global const Mesh*
     
     float temp = f * dot(edge2, q);
     if(inRayRange(temp)) {
-        __global const vec2* tex_A = getMeshUV(scene, mesh, idx_0);
-        __global const vec2* tex_B = getMeshUV(scene, mesh, idx_1);
-        __global const vec2* tex_C = getMeshUV(scene, mesh, idx_2);
-        
-        hpi->uv = getTextureUV(tex_A, tex_B, tex_C, u, v);
+        hpi->uv = getTextureUV(scene, mesh, idx_A, idx_B, idx_C, u, v);
         hpi->t = temp;
         hpi->p = rayPointAtParam(r, temp);
         // ASSUME COUNTER-CLOCKWISE WINDING ORDER
@@ -310,18 +310,13 @@ bool hitModel(const Ray* r, __global const Scene* scene, __global const Model* m
     HPI hpi_result;
     
     for(uint i = 0; i < model->mesh_count; i++) {
-        __global const Mesh* current_mesh = scene->mesh_buffer + model->mesh_anchor + i;
-        
-        if(hitMeshOut(r, scene, model, current_mesh, &hpi_result) && hpi_result.t < hit_min) {
+        if(hitMeshOut(r, scene, model, scene->mesh_buffer + model->mesh_anchor + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
+            hpi->texture_ID = model->texture_ID;
             hit_min = hpi_result.t;
         }
     }
-    
-    //if(hit_any && getMaterial(scene, hpi->mat_ID)->type == t_textured) {
-    //    hpi->uv = (col)(nearest_mesh_texture_uv.x, nearest_mesh_texture_uv.y, 1.0f);// getTextureCol(texture, &nearest_mesh_texture_uv);
-    //}
     
     return hit_any;
 }
@@ -448,7 +443,7 @@ inline col bkgCol(const Ray *r) {
     return (col)(y * 0.6f + 0.1f, y, 1.0f);
 }
 
-col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_t texture, uint sample) {
+col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_array_t texture, uint sample) {
     col out = (col)(1.0f);
     
     for(uint i = 0; i < DEPTH; i++) {
@@ -481,7 +476,7 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
                     break;
                 case t_textured:
                     rayScatter(r, &out, &hpi, random_buffer, i + sample, scene);
-                    mixCol(out, getTextureCol(texture, &(hpi.uv)));
+                    mixCol(out, getTextureCol(texture, &(hpi.uv), hpi.texture_ID));
                     break;
             }
             
@@ -500,7 +495,7 @@ inline col gamma_corr_inv(const col* color) {
     return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA);
 }
 
-__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_t texture) {
+__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_array_t texture) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     
@@ -516,7 +511,7 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     write_imagef(image, (int2)(x, y), (float4)(gamma_corr(&out), 1.0f));
 }
 
-__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_t texture, const uint sample) {
+__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_array_t texture, const uint sample) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     int2 loc = (int2)(x, y);

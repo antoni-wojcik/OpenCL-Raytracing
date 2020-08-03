@@ -69,8 +69,6 @@ void RayTracer::createCLBuffers() {
     
     size_t random_buffer_size = RANDOM_BUFFER_SIZE * 4 * sizeof(cl_float);
     
-    random_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, random_buffer_size);
-    
     float* random_data = new float[RANDOM_BUFFER_SIZE * 4];
     
     std::random_device dev;
@@ -91,9 +89,7 @@ void RayTracer::createCLBuffers() {
         random_data[3 * RANDOM_BUFFER_SIZE + i] = u;
     }
     
-    cl::CommandQueue queue(context, device);
-    queue.enqueueWriteBuffer(random_buffer, CL_TRUE, 0, random_buffer_size, random_data);
-    queue.finish();
+    random_buffer = cl::Buffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, random_buffer_size, random_data);
     
     delete [] random_data;
     
@@ -101,8 +97,8 @@ void RayTracer::createCLBuffers() {
     scene.addMaterial(t_reflective, (cl_float3){1.0f, 1.0f, 1.0f}, 0.8f);
     scene.addMaterial(t_refractive, (cl_float3){1.0f, 1.0f, 1.0f}, 1.1f);
     scene.addMaterial(t_refractive, (cl_float3){1.0f, 1.0f, 1.0f}, 2.0f);
-    scene.addMaterial(t_diffuse, (cl_float3){1.0f, 0.0f, 0.0f}, 0.5f);
-    scene.addMaterial(t_diffuse, (cl_float3){0.0f, 1.0f, 0.0f}, 0.5f);
+    scene.addMaterial(t_diffuse, (cl_float3){1.0f, 0.0f, 0.0f}, 1.0f);
+    scene.addMaterial(t_diffuse, (cl_float3){0.0f, 1.0f, 0.0f}, 1.0f);
     scene.addMaterial(t_dielectric, (cl_float3){1.0f, 1.0f, 1.0f}, 1.3f);
     scene.addMaterial(t_light, (cl_float3){1.0f, 1.0f, 1.0f}, 0.0f);
     scene.addMaterial(t_diffuse, (cl_float3){1.0f, 1.0f, 1.0f}, 1.0f);
@@ -118,14 +114,18 @@ void RayTracer::createCLBuffers() {
     scene.addPlane((cl_float3){0.0f, 5.0f, 0.0f}, (cl_float3){0.0f, 1.0f, 0.0f}, 7);
     scene.addLens((cl_float3){5.0f, 0.0f, 0.0f}, (cl_float3){1.0f, 0.0f, 0.0f}, 10.0f, 10.0f, 2.0f, 2);
     
+    scene.addTexture("assets/textures/die.png");
+    scene.addTexture("assets/textures/die2.png");
+    scene.loadTextures(context, device);
+    
     glm::mat4 model(1.0f);
     model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    //model = glm::translate(model, glm::vec3(0.0f, 5.0f, 0.0f));
+    scene.loadModel("assets/cube/cube.obj", 8, 0, model);
     
-    scene.loadTexture(context, "assets/textures/die.png");
-    scene.loadModel("assets/cube/cube.obj", 8, model);
-    //model = glm::translate(model, glm::vec3(1.0f));
-    //scene.loadModel("assets/cube/cube.obj", 8, model);
+    model = glm::mat4(1.0f);
+    model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::translate(model, glm::vec3(-6.0f, 0.0f, 0.0f));
+    scene.loadModel("assets/cube/cube.obj", 8, 1, model);
     
     scene.setupBuffers(context);
 }
