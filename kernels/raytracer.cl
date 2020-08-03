@@ -2,14 +2,16 @@
 
 #define MIN_DISTANCE 0.001f
 #define MAX_DISTANCE 1000.0f
-#define DEPTH 10
+#define DEPTH 30
 
 #define RANDOM_BUFFER_SIZE 100000
 
 typedef float3 vec3;
+typedef float2 vec2;
 typedef float3 col;
 
 __constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
+__constant sampler_t texture_sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
 
 typedef struct {
     vec3 origin; //starting location
@@ -17,7 +19,7 @@ typedef struct {
     float param; //has to be set to 0 when initalized
 } Ray;
 
-typedef enum { t_refractive, t_reflective, t_dielectric, t_diffuse, t_light } MatType;
+typedef enum { t_refractive, t_reflective, t_dielectric, t_diffuse, t_textured, t_light } MatType;
 
 typedef struct {
     MatType type;
@@ -29,6 +31,7 @@ typedef struct {
     float t;
     vec3 p;
     vec3 normal;
+    vec2 uv;
     uint mat_ID;
 } HPI; //HitPointInfo
 
@@ -56,6 +59,7 @@ typedef struct {
 typedef struct {
     uint index_anchor;
     uint face_count;
+    //uint texture_uv_anchor;
     uint texture_ID;
 } Mesh;
 
@@ -73,6 +77,7 @@ typedef struct {
     __global const Lens* lenses;
     
     __global const vec3* vertex_buffer;
+    __global const vec2* texture_uv_buffer;
     __global const uint* index_buffer;
     __global const Mesh* mesh_buffer;
     __global const Model* models;
@@ -85,6 +90,18 @@ typedef struct {
 
 inline __global const vec3* getMeshVertex(__global const Scene* scene, __global const Mesh* mesh, uint i) {
     return scene->vertex_buffer + scene->index_buffer[mesh->index_anchor + i];
+}
+
+inline __global const vec2* getMeshUV(__global const Scene* scene, __global const Mesh* mesh, uint i) {
+    return scene->texture_uv_buffer + scene->index_buffer[mesh->index_anchor + i]; //FIXME: CHECK IF IT MAKES SENSE (sln: use a separate texture index buffer)
+}
+
+vec2 getTextureUV(__global const vec2* tex_A, __global const vec2* tex_B, __global const vec2* tex_C, float u, float v) {
+    return (*tex_A) * (1.0f - u - v) + (*tex_B) * u + (*tex_C) * v;
+}
+
+inline const col getTextureCol(__read_only image2d_t texture, const vec2* loc) {
+    return read_imagef(texture, texture_sampler, *loc).xyz;
 }
 
 inline vec3 getVec(__global const float* buff, uint id) {
@@ -105,7 +122,7 @@ inline float random(__global const float* random_buffer, const Ray* r, uint s_se
     return random_buffer[seed];
 }
 
-inline bool inRayRange(float x) { return (x - MAX_DISTANCE) * (x - MIN_DISTANCE) <= 0; }
+inline bool inRayRange(float x) { return (x - MAX_DISTANCE) * (x - MIN_DISTANCE) <= 0.0f; }
 
 Ray genInitRay(__global const float* camera_buffer, const vec3* origin, float s, float t) {
     Ray r;
@@ -235,8 +252,12 @@ bool hitLens(const Ray* r, __global const Lens* lens, HPI* hpi) {
     return false;
 }
 
-bool hitTriangle(const Ray* r, __global const vec3* A, __global const vec3* B, __global const vec3* C, HPI* hpi) {
+bool hitTriangle(const Ray* r, __global const Scene* scene, __global const Mesh* mesh, uint idx_0, uint idx_1, uint idx_2, HPI* hpi) {
     // Moller-Trumbore algorithm
+    
+    __global const vec3* A = getMeshVertex(scene, mesh, idx_0);
+    __global const vec3* B = getMeshVertex(scene, mesh, idx_1);
+    __global const vec3* C = getMeshVertex(scene, mesh, idx_2);
     
     vec3 edge1 = (*B) - (*A);
     vec3 edge2 = (*C) - (*A);
@@ -255,6 +276,11 @@ bool hitTriangle(const Ray* r, __global const vec3* A, __global const vec3* B, _
     
     float temp = f * dot(edge2, q);
     if(inRayRange(temp)) {
+        __global const vec2* tex_A = getMeshUV(scene, mesh, idx_0);
+        __global const vec2* tex_B = getMeshUV(scene, mesh, idx_1);
+        __global const vec2* tex_C = getMeshUV(scene, mesh, idx_2);
+        
+        hpi->uv = getTextureUV(tex_A, tex_B, tex_C, u, v);
         hpi->t = temp;
         hpi->p = rayPointAtParam(r, temp);
         // ASSUME COUNTER-CLOCKWISE WINDING ORDER
@@ -267,7 +293,7 @@ bool hitTriangle(const Ray* r, __global const vec3* A, __global const vec3* B, _
 bool hitMeshOut(const Ray* r, __global const Scene* scene, __global const Model* model, __global const Mesh* mesh, HPI* hpi) {
     // ASSUME THAT THE MESH IS CONVEX
     for(uint i = 0; i < mesh->face_count; i++) {
-        if(hitTriangle(r, getMeshVertex(scene, mesh, 3 * i), getMeshVertex(scene, mesh, 3 * i + 1), getMeshVertex(scene, mesh, 3 * i + 2), hpi)) {
+        if(hitTriangle(r, scene, mesh, (3 * i), (3 * i + 1), (3 * i + 2), hpi)) {
             if(dot(hpi->normal, r->dir) < 0.0f) {
                 hpi->mat_ID = model->mat_ID;
                 return true;
@@ -284,12 +310,18 @@ bool hitModel(const Ray* r, __global const Scene* scene, __global const Model* m
     HPI hpi_result;
     
     for(uint i = 0; i < model->mesh_count; i++) {
-        if(hitMeshOut(r, scene, model, scene->mesh_buffer + model->mesh_anchor + i, &hpi_result) && hpi_result.t < hit_min) {
+        __global const Mesh* current_mesh = scene->mesh_buffer + model->mesh_anchor + i;
+        
+        if(hitMeshOut(r, scene, model, current_mesh, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
             hit_min = hpi_result.t;
         }
     }
+    
+    //if(hit_any && getMaterial(scene, hpi->mat_ID)->type == t_textured) {
+    //    hpi->uv = (col)(nearest_mesh_texture_uv.x, nearest_mesh_texture_uv.y, 1.0f);// getTextureCol(texture, &nearest_mesh_texture_uv);
+    //}
     
     return hit_any;
 }
@@ -409,12 +441,14 @@ void rayRefractDielectric(Ray* r, col* c, HPI* hpi, __global const float* random
     rayReflect(r, c, hpi, scene);
 }
 
+#define mixCol(out, addition) out = min(out, addition)
+
 inline col bkgCol(const Ray *r) {
     float y = -r->dir.y * 0.25f + 0.6f;
     return (col)(y * 0.6f + 0.1f, y, 1.0f);
 }
 
-col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, uint sample) {
+col getCol(Ray* r, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_t texture, uint sample) {
     col out = (col)(1.0f);
     
     for(uint i = 0; i < DEPTH; i++) {
@@ -427,22 +461,31 @@ col getCol(Ray* r, __global const float* random_buffer, __global const Scene* sc
             switch(getMaterial(scene, hpi.mat_ID)->type) {
                 case t_diffuse:
                     rayScatter(r, &out, &hpi, random_buffer, i + sample, scene);
+                    mixCol(out, getMaterial(scene, hpi.mat_ID)->color);
                     break;
                 case t_light:
                     i = DEPTH;
+                    mixCol(out, getMaterial(scene, hpi.mat_ID)->color);
                     break;
                 case t_reflective:
                     rayReflect(r, &out, &hpi, scene);
+                    mixCol(out, getMaterial(scene, hpi.mat_ID)->color);
                     break;
                 case t_refractive:
                     rayRefract(r, &out, &hpi, scene);
+                    mixCol(out, getMaterial(scene, hpi.mat_ID)->color);
                     break;
                 case t_dielectric:
                     rayRefractDielectric(r, &out, &hpi, random_buffer, i + sample, scene);
+                    mixCol(out, getMaterial(scene, hpi.mat_ID)->color);
+                    break;
+                case t_textured:
+                    rayScatter(r, &out, &hpi, random_buffer, i + sample, scene);
+                    mixCol(out, getTextureCol(texture, &(hpi.uv)));
                     break;
             }
             
-            out = min(out, getMaterial(scene, hpi.mat_ID)->color); // mix colors
+            //out = min(out, getMaterial(scene, hpi.mat_ID)->color); // mix colors
         }
     }
     
@@ -457,7 +500,7 @@ inline col gamma_corr_inv(const col* color) {
     return (*color) * (*color); // for anny other GAMMA value, use: pow(*color, GAMMA);
 }
 
-__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene) {
+__kernel void trace(__write_only image2d_t image, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_t texture) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     
@@ -468,12 +511,12 @@ __kernel void trace(__write_only image2d_t image, __global const float* camera_b
     
     Ray r_main = genInitRay(camera_buffer, &camera_pos, s, t);
     
-    col out = getCol(&r_main, random_buffer, scene, 0);
+    col out = getCol(&r_main, random_buffer, scene, texture, 0);
     
     write_imagef(image, (int2)(x, y), (float4)(gamma_corr(&out), 1.0f));
 }
 
-__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, const uint sample) {
+__kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t image_out, __global const float* camera_buffer, __global const float* random_buffer, __global const Scene* scene, __read_only image2d_t texture, const uint sample) {
     int x = get_global_id(0);
     int y = get_global_id(1);
     int2 loc = (int2)(x, y);
@@ -489,7 +532,7 @@ __kernel void retrace(__read_only image2d_t image_in, __write_only image2d_t ima
     
     float mixing_param = (float)(sample)/(float)(sample + 1);
     
-    col out = mix(getCol(&r_main, random_buffer, scene, sample), gamma_corr_inv(&prev_col), mixing_param);
+    col out = mix(getCol(&r_main, random_buffer, scene, texture, sample), gamma_corr_inv(&prev_col), mixing_param);
     
     // use sqrt for gamma_corr correction
     write_imagef(image_out, loc, (float4)(gamma_corr(&out), 1.0f));
@@ -502,17 +545,18 @@ typedef struct {
     uint model_count;
 } ObjectCounter;
 
-__kernel void createScene(__global Scene* scene, __global const Material* materials, __global const Sphere* sphere_buffer, __global const Plane* plane_buffer, __global const Lens* lens_buffer, __global const vec3* vertex_buffer, __global const uint* index_buffer, __global const Mesh* mesh_buffer, __global const Model* model_buffer, const ObjectCounter obj_counter) {
+__kernel void createScene(__global Scene* scene, __global const Material* materials, __global const Sphere* sphere_buffer, __global const Plane* plane_buffer, __global const Lens* lens_buffer, __global const vec3* vertex_buffer, __global const vec2* texture_uv_buffer, __global const uint* index_buffer, __global const Mesh* mesh_buffer, __global const Model* model_buffer, const ObjectCounter obj_counter) {
     scene->materials = materials;
     
     scene->spheres = sphere_buffer;
     scene->planes = plane_buffer;
     scene->lenses = lens_buffer;
+    scene->models = model_buffer;
     
     scene->vertex_buffer = vertex_buffer;
+    scene->texture_uv_buffer = texture_uv_buffer;
     scene->index_buffer = index_buffer;
     scene->mesh_buffer = mesh_buffer;
-    scene->models = model_buffer;
     
     scene->sphere_count = obj_counter.sphere_count;
     scene->plane_count = obj_counter.plane_count;

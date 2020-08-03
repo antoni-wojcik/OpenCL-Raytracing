@@ -106,6 +106,7 @@ void RayTracer::createCLBuffers() {
     scene.addMaterial(t_dielectric, (cl_float3){1.0f, 1.0f, 1.0f}, 1.3f);
     scene.addMaterial(t_light, (cl_float3){1.0f, 1.0f, 1.0f}, 0.0f);
     scene.addMaterial(t_diffuse, (cl_float3){1.0f, 1.0f, 1.0f}, 1.0f);
+    scene.addMaterial(t_textured, (cl_float3){1.0f, 1.0f, 1.0f}, 1.0f);
     
     scene.addSphere((cl_float3){0.0f, 0.0f, 3.0f}, 1.5f, 0);
     scene.addSphere((cl_float3){0.0f, 0.0f, -3.0f}, 1.0f, 0);
@@ -121,7 +122,10 @@ void RayTracer::createCLBuffers() {
     model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     //model = glm::translate(model, glm::vec3(0.0f, 5.0f, 0.0f));
     
-    scene.loadModel("assets/cube/cube.obj", 0, model);
+    scene.loadTexture(context, "assets/textures/die.png");
+    scene.loadModel("assets/cube/cube.obj", 8, model);
+    //model = glm::translate(model, glm::vec3(1.0f));
+    //scene.loadModel("assets/cube/cube.obj", 8, model);
     
     scene.setupBuffers(context);
 }
@@ -137,11 +141,13 @@ void RayTracer::setKernelArgs() {
     trace_kernel.setArg(1, camera_buffer);
     trace_kernel.setArg(2, random_buffer);
     trace_kernel.setArg(3, scene.getBuffer());
+    trace_kernel.setArg(4, scene.getTexture());
     retrace_kernel.setArg(0, image);
     retrace_kernel.setArg(1, image);
     retrace_kernel.setArg(2, camera_buffer);
     retrace_kernel.setArg(3, random_buffer);
     retrace_kernel.setArg(4, scene.getBuffer());
+    retrace_kernel.setArg(5, scene.getTexture());
     scene.setKernelArgs();
 }
 
@@ -172,7 +178,7 @@ void RayTracer::renderAgain(const Camera* camera) {
     sample_counter++;
     
     try {
-        retrace_kernel.setArg(5, sample_counter);
+        retrace_kernel.setArg(6, sample_counter);
         
         std::vector<cl::Memory> mem_objs;
         mem_objs.push_back(image);

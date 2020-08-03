@@ -27,7 +27,7 @@
 #include "cl2.hpp"
 #include "opencl_error.h"
 
-enum MatType { t_refractive, t_reflective, t_dielectric, t_diffuse, t_light };
+enum MatType { t_refractive, t_reflective, t_dielectric, t_diffuse, t_textured, t_light };
 
 struct Material {
     MatType type;
@@ -85,8 +85,8 @@ private:
     cl::Buffer scene_buffer;
     cl::Buffer material_buffer;
     cl::Buffer sphere_buffer, plane_buffer, lens_buffer;
-    cl::Buffer vertex_buffer, index_buffer, mesh_buffer, model_buffer;
-    cl::Image2DArray texture_buffer;
+    cl::Buffer vertex_buffer, texture_uv_buffer, index_buffer, mesh_buffer, model_buffer;
+    cl::Image2D texture;
     
     std::vector<Material> materials;
     
@@ -96,7 +96,7 @@ private:
     std::vector<Model> models;
     
     std::vector<cl_float3> vertices;
-    std::vector<cl_float2> uv;
+    std::vector<cl_float2> texture_uv;
     std::vector<cl_uint> indices;
     std::vector<Mesh> meshes;
     
@@ -110,6 +110,7 @@ private:
     inline Plane* getPlanes() { return &(planes[0]); }
     inline Lens* getLenses() { return &(lenses[0]); }
     inline cl_float3* getVertices() { return &(vertices[0]); }
+    inline cl_float2* getTexUV() { return &(texture_uv[0]); }
     inline cl_uint* getIndices() { return &(indices[0]); }
     inline Mesh* getMeshes() { return &(meshes[0]); }
     inline Model* getModels() { return &(models[0]); }
@@ -119,6 +120,7 @@ private:
     inline size_t getPlaneSize() { return sizeof(Plane) * planes.size(); }
     inline size_t getLensSize() { return sizeof(Lens) * lenses.size(); }
     inline size_t getVertexSize() { return sizeof(cl_float3) * vertices.size(); }
+    inline size_t getTexUVSize() { return sizeof(cl_float2) * texture_uv.size(); }
     inline size_t getIndexSize() { return sizeof(cl_uint) * indices.size(); }
     inline size_t getMeshSize() { return sizeof(Mesh) * meshes.size(); }
     inline size_t getModelSize() { return sizeof(Model) * models.size(); }
@@ -136,7 +138,10 @@ public:
     void addLens(const cl_float3& pos, const cl_float3& normal, cl_float r1, cl_float r2, cl_float h, uint mat_ID);
     void loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform = glm::mat4(1.0f));
     
+    void loadTexture(const cl::Context& context, const std::string& path);
+    
     inline const cl::Buffer& getBuffer() { return scene_buffer; }
+    inline const cl::Image2D& getTexture() { return texture; }
 };
 
 #endif /* scene_h */

@@ -10,6 +10,10 @@
 #include <cmath>
 #include "scene.h"
 
+// include the STB library to read texture files
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 //TODO: HANDLE "COUNT = 0" CASES
 
 struct ObjectCounter {
@@ -29,6 +33,7 @@ void SceneCreator::setupBuffers(cl::Context& context) {
     lens_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getLensSize());
     
     vertex_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getVertexSize());
+    texture_uv_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getTexUVSize());
     index_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getIndexSize());
     mesh_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getMeshSize());
     model_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getModelSize());
@@ -45,11 +50,12 @@ void SceneCreator::createScene(cl::Context& context, cl::Device& device) {
     queue.enqueueWriteBuffer(sphere_buffer, CL_TRUE, 0, getSphereSize(), getSpheres());
     queue.enqueueWriteBuffer(plane_buffer, CL_TRUE, 0, getPlaneSize(), getPlanes());
     queue.enqueueWriteBuffer(lens_buffer, CL_TRUE, 0, getLensSize(), getLenses());
+    queue.enqueueWriteBuffer(model_buffer, CL_TRUE, 0, getModelSize(), getModels());
     
     queue.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, getVertexSize(), getVertices());
+    queue.enqueueWriteBuffer(texture_uv_buffer, CL_TRUE, 0, getTexUVSize(), getTexUV());
     queue.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, getIndexSize(), getIndices());
     queue.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, getMeshSize(), getMeshes());
-    queue.enqueueWriteBuffer(model_buffer, CL_TRUE, 0, getModelSize(), getModels());
     
     queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
     queue.finish();
@@ -62,9 +68,10 @@ void SceneCreator::setKernelArgs() {
     scene_kernel.setArg(3, plane_buffer);
     scene_kernel.setArg(4, lens_buffer);
     scene_kernel.setArg(5, vertex_buffer);
-    scene_kernel.setArg(6, index_buffer);
-    scene_kernel.setArg(7, mesh_buffer);
-    scene_kernel.setArg(8, model_buffer);
+    scene_kernel.setArg(6, texture_uv_buffer);
+    scene_kernel.setArg(7, index_buffer);
+    scene_kernel.setArg(8, mesh_buffer);
+    scene_kernel.setArg(9, model_buffer);
     
     ObjectCounter obj_counter;
     obj_counter.sphere_count = (cl_uint)spheres.size();
@@ -72,7 +79,7 @@ void SceneCreator::setKernelArgs() {
     obj_counter.lens_count = (cl_uint)lenses.size();
     obj_counter.model_count = (cl_uint)models.size();
     
-    scene_kernel.setArg(9, obj_counter);
+    scene_kernel.setArg(10, obj_counter);
 }
 
 void SceneCreator::addMaterial(MatType type, const cl_float3& color, cl_float extra_data) {
@@ -108,6 +115,33 @@ void SceneCreator::addLens(const cl_float3& pos, const cl_float3& normal, cl_flo
     lens.mat_ID = mat_ID;
     
     lenses.push_back(lens);
+}
+
+void SceneCreator::loadTexture(const cl::Context& context, const std::string& path) {
+    int width, height;
+    int channel_count;
+    
+    float* texture_data = stbi_loadf(path.c_str(), &width, &height, &channel_count, 4);
+    /*std::cout << width << " " << height << std::endl;
+    for(int i = 0; i < height; i++) for(int j = 0; j < width; j++) {
+        for(int k = 0; k < 4; k++) std::cout << texture_data[(i * width + j) * 4 + k] << " ";
+            std::cout << std::endl;
+    }*/
+    
+    if(texture_data) {
+        if(channel_count == 4) {// RGBA only
+            cl::ImageFormat texture_format(CL_RGBA, CL_FLOAT); //CL_SIGNED_INT8
+            texture = cl::Image2D(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, texture_format, size_t(width), size_t(height), 0, texture_data);
+            
+            stbi_image_free(texture_data);
+        } else {
+            std::cerr << "ERROR: STBimage: TEXTURE HAS A WRONG FORMAT: " << channel_count << " INSTEAD OF 4" << std::endl;
+            exit(-1);
+        }
+    } else {
+        std::cerr << "ERROR: STBimage: COULD NOT FIND THE TEXTURE" << std::endl;
+        exit(-1);
+    }
 }
 
 void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform) {
@@ -153,12 +187,21 @@ inline cl_float3 transformVertex(const aiVector3D& vertex, const glm::mat4& tran
 
 Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& transform) {
     cl_uint index_anchor = (cl_uint)indices.size();
+    cl_uint texture_uv_anchor = (cl_uint)texture_uv.size();
     cl_uint face_count = 0;
     
     for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
         cl_float3 vertex = transformVertex(mesh->mVertices[i], transform);
         
         vertices.push_back(vertex);
+        
+        if(mesh->mTextureCoords[0]) { // does the mesh contain texture coordinates?
+            cl_float2 uv;
+            uv.x = mesh->mTextureCoords[0][i].x;
+            uv.y = mesh->mTextureCoords[0][i].y;
+            
+            texture_uv.push_back(uv);
+        }
     }
     
     for(cl_uint i = 0; i < mesh->mNumFaces; i++) {
@@ -168,5 +211,5 @@ Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, const glm::ma
         for(cl_uint j = 0; j < face.mNumIndices; j++) indices.push_back((cl_uint)face.mIndices[j]);
     }
     
-    return Mesh(index_anchor, face_count, 0);
+    return Mesh(index_anchor, face_count, texture_uv_anchor);
 }
