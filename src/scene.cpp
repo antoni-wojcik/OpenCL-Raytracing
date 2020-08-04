@@ -14,6 +14,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#define SIZE_EMPTY 1
+
 //TODO: HANDLE "COUNT = 0" CASES
 
 struct ObjectCounter {
@@ -23,39 +25,49 @@ struct ObjectCounter {
     cl_uint model_count;
 };
 
+inline void setupBuffer(cl::Context& context, cl::Buffer& buffer, size_t size) {
+    if(size) buffer = cl::Buffer(context, CL_MEM_READ_ONLY, size);
+    else buffer = cl::Buffer(context, CL_MEM_READ_ONLY, SIZE_EMPTY);
+}
+
 void SceneCreator::setupBuffers(cl::Context& context) {
     scene_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(cl_mem));
     
-    material_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getMaterialSize());
+    setupBuffer(context, material_buffer, getMaterialSize());
     
-    sphere_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getSphereSize());
-    plane_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getPlaneSize());
-    lens_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getLensSize());
+    setupBuffer(context, sphere_buffer, getSphereSize());
+    setupBuffer(context, plane_buffer, getPlaneSize());
+    setupBuffer(context, lens_buffer, getLensSize());
+    setupBuffer(context, model_buffer, getModelSize());
     
-    vertex_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getVertexSize());
-    texture_uv_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getTexUVSize());
-    index_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getIndexSize());
-    mesh_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getMeshSize());
-    model_buffer = cl::Buffer(context, CL_MEM_READ_ONLY, getModelSize());
+    setupBuffer(context, vertex_buffer, getVertexSize());
+    setupBuffer(context, texture_uv_buffer, getTexUVSize());
+    setupBuffer(context, index_buffer, getIndexSize());
+    setupBuffer(context, mesh_buffer, getMeshSize());
 }
 
 void SceneCreator::createKernel(cl::Program& program, const char* name) {
     scene_kernel = cl::Kernel(program, name);
 }
 
+inline void writeBuffer(cl::CommandQueue& queue, cl::Buffer& buffer, size_t size, void* data_ptr) {
+    if(size) queue.enqueueWriteBuffer(buffer, CL_TRUE, 0, size, data_ptr);
+    //else queue.enqueueWriteBuffer(buffer, CL_TRUE, 0, size, data_ptr);
+}
+
 void SceneCreator::createScene(cl::Context& context, cl::Device& device) {
     cl::CommandQueue queue(context, device);
-    queue.enqueueWriteBuffer(material_buffer, CL_TRUE, 0, getMaterialSize(), getMaterials());
+    writeBuffer(queue, material_buffer, getMaterialSize(), getMaterials());
     
-    queue.enqueueWriteBuffer(sphere_buffer, CL_TRUE, 0, getSphereSize(), getSpheres());
-    queue.enqueueWriteBuffer(plane_buffer, CL_TRUE, 0, getPlaneSize(), getPlanes());
-    queue.enqueueWriteBuffer(lens_buffer, CL_TRUE, 0, getLensSize(), getLenses());
-    queue.enqueueWriteBuffer(model_buffer, CL_TRUE, 0, getModelSize(), getModels());
+    writeBuffer(queue, sphere_buffer, getSphereSize(), getSpheres());
+    writeBuffer(queue, plane_buffer, getPlaneSize(), getPlanes());
+    writeBuffer(queue, lens_buffer, getLensSize(), getLenses());
+    writeBuffer(queue, model_buffer, getModelSize(), getModels());
     
-    queue.enqueueWriteBuffer(vertex_buffer, CL_TRUE, 0, getVertexSize(), getVertices());
-    queue.enqueueWriteBuffer(texture_uv_buffer, CL_TRUE, 0, getTexUVSize(), getTexUV());
-    queue.enqueueWriteBuffer(index_buffer, CL_TRUE, 0, getIndexSize(), getIndices());
-    queue.enqueueWriteBuffer(mesh_buffer, CL_TRUE, 0, getMeshSize(), getMeshes());
+    writeBuffer(queue, vertex_buffer, getVertexSize(), getVertices());
+    writeBuffer(queue, texture_uv_buffer, getTexUVSize(), getTexUV());
+    writeBuffer(queue, index_buffer, getIndexSize(), getIndices());
+    writeBuffer(queue, mesh_buffer, getMeshSize(), getMeshes());
     
     queue.enqueueNDRangeKernel(scene_kernel, cl::NullRange, cl::NDRange(size_t(1)), cl::NullRange);
     queue.finish();
@@ -118,46 +130,50 @@ void SceneCreator::addLens(const cl_float3& pos, const cl_float3& normal, cl_flo
 }
 
 void SceneCreator::loadTextures(cl::Context& context, cl::Device& device) {
-    if(texture_paths.size() == 0)
-        processError("ERROR: TEXTURE COUNT = 0");
-    
-    int tex_width = 0, tex_height = 0;
-    
-    cl::CommandQueue queue(context, device);
-    
-    for(unsigned int texture_ID = 0; texture_ID < texture_paths.size(); texture_ID++) {
-        int width, height;
-        int channel_count;
+    if(models.size() > 0) {
+        if(texture_paths.size() == 0)
+            processError("ERROR: TEXTURE COUNT = 0");
         
-        float* texture_data = stbi_loadf(texture_paths[texture_ID].c_str(), &width, &height, &channel_count, 0);
+        int tex_width = 0, tex_height = 0;
         
-        if(texture_ID == 0) {
-            tex_width = width;
-            tex_height = height;
-    
-            textures = cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_RGBA, CL_FLOAT), texture_paths.size(), width, height, 0, 0);
-        } else if(tex_width != width || tex_height != height) {
-            queue.finish();
-            processError("ERROR: TEXTURES HAVE DIFFERENT SIZES: TEMPLATE: " + std::to_string(tex_width) + " x " + std::to_string(tex_height) + ", TEXTURE ID(" + std::to_string(texture_ID) + "): " + std::to_string(width) + " x " + std::to_string(height));
-        }
+        cl::CommandQueue queue(context, device);
         
-        if(texture_data) {
-            if(channel_count == 4) {// RGBA only
-                //queue.enqueueWriteImage(texture, CL_TRUE, {0, 0, 0}, {size_t(width), size_t(height), 1}, 0, 0, texture_data);
-                queue.enqueueWriteImage(textures, CL_TRUE, {0, 0, texture_ID}, {size_t(width), size_t(height), 1}, 0, 0, texture_data);
-                
-                stbi_image_free(texture_data);
+        for(unsigned int texture_ID = 0; texture_ID < texture_paths.size(); texture_ID++) {
+            int width, height;
+            int channel_count;
+            
+            float* texture_data = stbi_loadf(texture_paths[texture_ID].c_str(), &width, &height, &channel_count, 0);
+            
+            if(texture_ID == 0) {
+                tex_width = width;
+                tex_height = height;
+        
+                textures = cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_RGBA, CL_FLOAT), texture_paths.size(), width, height, 0, 0);
+            } else if(tex_width != width || tex_height != height) {
+                queue.finish();
+                processError("ERROR: TEXTURES HAVE DIFFERENT SIZES: TEMPLATE: " + std::to_string(tex_width) + " x " + std::to_string(tex_height) + ", TEXTURE ID(" + std::to_string(texture_ID) + "): " + std::to_string(width) + " x " + std::to_string(height));
+            }
+            
+            if(texture_data) {
+                if(channel_count == 4) {// RGBA only
+                    //queue.enqueueWriteImage(texture, CL_TRUE, {0, 0, 0}, {size_t(width), size_t(height), 1}, 0, 0, texture_data);
+                    queue.enqueueWriteImage(textures, CL_TRUE, {0, 0, texture_ID}, {size_t(width), size_t(height), 1}, 0, 0, texture_data);
+                    
+                    stbi_image_free(texture_data);
+                } else {
+                    queue.finish();
+                    processError("ERROR: STBimage: TEXTURE HAS A WRONG FORMAT: " + std::to_string(channel_count) + " INSTEAD OF 4 (RGBA)");
+                }
             } else {
                 queue.finish();
-                processError("ERROR: STBimage: TEXTURE HAS A WRONG FORMAT: " + std::to_string(channel_count) + " INSTEAD OF 4 (RGBA)");
+                processError("ERROR: STBimage: COULD NOT FIND THE TEXTURE");
             }
-        } else {
-            queue.finish();
-            processError("ERROR: STBimage: COULD NOT FIND THE TEXTURE");
         }
+        
+        queue.finish();
+    } else {
+        textures = cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_RGBA, CL_FLOAT), SIZE_EMPTY, SIZE_EMPTY, SIZE_EMPTY, 0, 0);
     }
-    
-    queue.finish();
 }
 
 void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform) {
