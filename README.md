@@ -6,6 +6,11 @@
 
 1. Handle null cases in the scene creation
 2. Create a scene from file
-3. Add cuboids
-4. New materials: metal, fog, jelly (diffuse + dielectric)
-5. Spatial partitioning
+3. Improve random sampling
+4. Add cuboids
+5. New materials: metal, fog, jelly (diffuse + dielectric)
+6. Spatial partitioning
+
+## DONE
+
+Load textures while loading models (instead of manual loading)

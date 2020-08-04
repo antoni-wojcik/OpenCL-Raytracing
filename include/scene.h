@@ -66,18 +66,17 @@ struct Mesh {
     cl_uint vertex_anchor;
     cl_uint index_anchor;
     cl_uint face_count;
-    //cl_uint texture_ID;
+    cl_uint texture_ID;
     
-    Mesh(cl_uint vertex_anchor, cl_uint index_anchor, cl_uint face_count) : vertex_anchor(vertex_anchor), index_anchor(index_anchor), face_count(face_count) {}
+    Mesh(cl_uint vertex_anchor, cl_uint index_anchor, cl_uint face_count, cl_uint texture_ID) : vertex_anchor(vertex_anchor), index_anchor(index_anchor), face_count(face_count), texture_ID(texture_ID) {}
 };
 
 struct Model {
     cl_uint mesh_anchor;
     cl_uint mesh_count;
     cl_uint mat_ID;
-    cl_uint texture_ID;
     
-    Model(cl_uint mesh_anchor, cl_uint mesh_count, cl_uint mat_ID, cl_uint texture_ID) : mesh_anchor(mesh_anchor), mesh_count(mesh_count), mat_ID(mat_ID), texture_ID(texture_ID) {}
+    Model(cl_uint mesh_anchor, cl_uint mesh_count, cl_uint mat_ID) : mesh_anchor(mesh_anchor), mesh_count(mesh_count), mat_ID(mat_ID) {}
 };
 
 class SceneCreator {
@@ -90,7 +89,6 @@ private:
     cl::Buffer material_buffer;
     cl::Buffer sphere_buffer, plane_buffer, lens_buffer;
     cl::Buffer vertex_buffer, texture_uv_buffer, index_buffer, mesh_buffer, model_buffer;
-    cl::Image2D texture;
     cl::Image2DArray textures;
     
     std::vector<Material> materials;
@@ -109,8 +107,8 @@ private:
     
     Assimp::Importer importer;
     
-    cl_uint processNode(aiNode* node, const aiScene* scene, const glm::mat4& transform);
-    Mesh processMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& transform);
+    cl_uint processNode(aiNode* node, const aiScene* scene, cl_uint mat_ID, const glm::mat4& transform);
+    Mesh processMesh(aiMesh* mesh, const aiScene* scene, cl_uint mat_ID, const glm::mat4& transform);
     
     inline Material* getMaterials() { return &(materials[0]); }
     inline Sphere* getSpheres() { return &(spheres[0]); }
@@ -131,6 +129,8 @@ private:
     inline size_t getIndexSize() { return sizeof(cl_uint) * indices.size(); }
     inline size_t getMeshSize() { return sizeof(Mesh) * meshes.size(); }
     inline size_t getModelSize() { return sizeof(Model) * models.size(); }
+
+    void processError(const std::string& err);
     
 public:
     void createKernel(cl::Program& program, const char* name);
@@ -143,13 +143,12 @@ public:
     void addSphere(const cl_float3& pos, cl_float r, cl_uint mat_ID);
     void addPlane(const cl_float3& pos, const cl_float3& normal, cl_uint mat_ID);
     void addLens(const cl_float3& pos, const cl_float3& normal, cl_float r1, cl_float r2, cl_float h, uint mat_ID);
-    void loadModel(const std::string& path, cl_uint mat_ID, cl_uint texture_ID, const glm::mat4& transform = glm::mat4(1.0f));
+    void loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform = glm::mat4(1.0f));
     
-    void addTexture(const std::string& path);
     void loadTextures(cl::Context& context, cl::Device& device);
     
     inline const cl::Buffer& getBuffer() { return scene_buffer; }
-    inline const cl::Image2DArray& getTexture() { return textures; }
+    inline const cl::Image2DArray& getTextures() { return textures; }
 };
 
 #endif /* scene_h */

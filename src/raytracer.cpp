@@ -57,7 +57,6 @@ void RayTracer::createGLTextures() {
 }
 
 void RayTracer::createGLBuffers() {
-    //cl::ImageFormat image_format(CL_RGBA, CL_FLOAT);
     image = cl::ImageGL(context, CL_MEM_READ_WRITE, GL_TEXTURE_2D, 0, texture_ID);
 }
 
@@ -114,18 +113,16 @@ void RayTracer::createCLBuffers() {
     scene.addPlane((cl_float3){0.0f, 5.0f, 0.0f}, (cl_float3){0.0f, 1.0f, 0.0f}, 7);
     scene.addLens((cl_float3){5.0f, 0.0f, 0.0f}, (cl_float3){1.0f, 0.0f, 0.0f}, 10.0f, 10.0f, 2.0f, 2);
     
-    scene.addTexture("assets/textures/die.png");
-    scene.addTexture("assets/textures/die2.png");
-    scene.loadTextures(context, device);
-    
     glm::mat4 model(1.0f);
     model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    scene.loadModel("assets/cube/cube.obj", 8, 0, model);
+    scene.loadModel("assets/cube/cube.obj", 8, model);
     
     model = glm::mat4(1.0f);
     model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     model = glm::translate(model, glm::vec3(-6.0f, 0.0f, 0.0f));
-    scene.loadModel("assets/cube/cube.obj", 8, 1, model);
+    scene.loadModel("assets/cube/cube2.obj", 8, model);
+    
+    scene.loadTextures(context, device);
     
     scene.setupBuffers(context);
 }
@@ -141,13 +138,13 @@ void RayTracer::setKernelArgs() {
     trace_kernel.setArg(1, camera_buffer);
     trace_kernel.setArg(2, random_buffer);
     trace_kernel.setArg(3, scene.getBuffer());
-    trace_kernel.setArg(4, scene.getTexture());
+    trace_kernel.setArg(4, scene.getTextures());
     retrace_kernel.setArg(0, image);
     retrace_kernel.setArg(1, image);
     retrace_kernel.setArg(2, camera_buffer);
     retrace_kernel.setArg(3, random_buffer);
     retrace_kernel.setArg(4, scene.getBuffer());
-    retrace_kernel.setArg(5, scene.getTexture());
+    retrace_kernel.setArg(5, scene.getTextures());
     scene.setKernelArgs();
 }
 

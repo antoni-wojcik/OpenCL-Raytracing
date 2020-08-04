@@ -117,15 +117,9 @@ void SceneCreator::addLens(const cl_float3& pos, const cl_float3& normal, cl_flo
     lenses.push_back(lens);
 }
 
-void SceneCreator::addTexture(const std::string& path) {
-    texture_paths.push_back(path);
-}
-
 void SceneCreator::loadTextures(cl::Context& context, cl::Device& device) {
-    if(texture_paths.size() == 0) {
-        std::cerr << "ERROR: TEXTURE COUNT = 0" << std::endl;
-        exit(-1);
-    }
+    if(texture_paths.size() == 0)
+        processError("ERROR: TEXTURE COUNT = 0");
     
     int tex_width = 0, tex_height = 0;
     
@@ -142,12 +136,9 @@ void SceneCreator::loadTextures(cl::Context& context, cl::Device& device) {
             tex_height = height;
     
             textures = cl::Image2DArray(context, CL_MEM_READ_ONLY, cl::ImageFormat(CL_RGBA, CL_FLOAT), texture_paths.size(), width, height, 0, 0);
-        } else if(texture_ID >= texture_paths.size()) {
-            std::cerr << "ERROR: TOO MANY TEXTURES" << std::endl;
-            exit(-1);
         } else if(tex_width != width || tex_height != height) {
-            std::cerr << "ERROR: TEXTURES HAVE DIFFERENT SIZES: TEMPLATE: " << tex_width << " x " << tex_height << ", TEXTURE ID(" << texture_ID << "): " << width << " x " << height << std::endl;
-            exit(-1);
+            queue.finish();
+            processError("ERROR: TEXTURES HAVE DIFFERENT SIZES: TEMPLATE: " + std::to_string(tex_width) + " x " + std::to_string(tex_height) + ", TEXTURE ID(" + std::to_string(texture_ID) + "): " + std::to_string(width) + " x " + std::to_string(height));
         }
         
         if(texture_data) {
@@ -157,51 +148,47 @@ void SceneCreator::loadTextures(cl::Context& context, cl::Device& device) {
                 
                 stbi_image_free(texture_data);
             } else {
-                std::cerr << "ERROR: STBimage: TEXTURE HAS A WRONG FORMAT: " << channel_count << " INSTEAD OF 4" << std::endl;
-                exit(-1);
+                queue.finish();
+                processError("ERROR: STBimage: TEXTURE HAS A WRONG FORMAT: " + std::to_string(channel_count) + " INSTEAD OF 4 (RGBA)");
             }
         } else {
-            std::cerr << "ERROR: STBimage: COULD NOT FIND THE TEXTURE" << std::endl;
-            exit(-1);
+            queue.finish();
+            processError("ERROR: STBimage: COULD NOT FIND THE TEXTURE");
         }
     }
     
     queue.finish();
 }
 
-void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID, cl_uint texture_ID, const glm::mat4& transform) {
-    const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
-    
-    if(texture_ID >= texture_paths.size()) {
-        std::cerr << "ERROR: TOO HIGH TEXTURE_ID: " << texture_ID << std::endl;
-        exit(-1);
-    }
-    
-    if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-        std::cout << "ERROR: Assimp: " << importer.GetErrorString() << std::endl;
-        return;
-    }
-    
+void SceneCreator::loadModel(const std::string& path, cl_uint mat_ID, const glm::mat4& transform) {
     static cl_uint mesh_count_total = 0;
     
-    cl_uint mesh_count = processNode(scene->mRootNode, scene, transform); // TODO: NOT SURE IF THE RESULT IS CORRECT
-    models.push_back((Model){mesh_count_total, mesh_count, mat_ID, texture_ID});
+    const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
+    
+    if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+        processError("ERROR: Assimp: " + std::string(importer.GetErrorString()));
+    
+    if(materials.size() <= mat_ID)
+        processError("ERROR: MATERIAL OF ID: " + std::to_string(mat_ID) + " DOES NOT EXIST");
+    
+    cl_uint mesh_count = processNode(scene->mRootNode, scene, mat_ID, transform); // TODO: NOT SURE IF THE RESULT IS CORRECT
+    models.push_back((Model){mesh_count_total, mesh_count, mat_ID});
     
     mesh_count_total += mesh_count;
 }
 
-cl_uint SceneCreator::processNode(aiNode* node, const aiScene* scene, const glm::mat4& transform) {
+cl_uint SceneCreator::processNode(aiNode* node, const aiScene* scene, cl_uint mat_ID, const glm::mat4& transform) {
     cl_uint mesh_count = 0;
     
     for(unsigned int i = 0; i < node->mNumMeshes; i++) {
         mesh_count++;
         
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        meshes.push_back(processMesh(mesh, scene, transform));
+        meshes.push_back(processMesh(mesh, scene, mat_ID, transform));
     }
     
     for(unsigned int i = 0; i < node->mNumChildren; i++) {
-        mesh_count += processNode(node->mChildren[i], scene, transform);
+        mesh_count += processNode(node->mChildren[i], scene, mat_ID, transform);
     }
     
     return mesh_count;
@@ -215,11 +202,12 @@ inline cl_float3 transformVertex(const aiVector3D& vertex, const glm::mat4& tran
     return temp;
 }
 
-Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& transform) {
+Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, cl_uint mat_ID, const glm::mat4& transform) {
     cl_uint index_anchor = (cl_uint)indices.size();
     cl_uint vertex_anchor = (cl_uint)vertices.size();
-    //cl_uint texture_uv_anchor = (cl_uint)texture_uv.size();
     cl_uint face_count = 0;
+    
+    // load vertices, texture coords, indices
     
     for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
         cl_float3 vertex = transformVertex(mesh->mVertices[i], transform);
@@ -242,5 +230,42 @@ Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, const glm::ma
         for(cl_uint j = 0; j < face.mNumIndices; j++) indices.push_back((cl_uint)face.mIndices[j]);
     }
     
-    return Mesh(vertex_anchor, index_anchor, face_count);
+    // load texture
+    
+    cl_uint texture_ID = -1;
+    
+    if(materials[mat_ID].type == t_textured) {
+        aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+        
+        unsigned int texture_count = material->GetTextureCount(aiTextureType_DIFFUSE);
+        
+        if(texture_count == 1) { // also check if material is of type t_textured
+            aiString str;
+            material->GetTexture(aiTextureType_DIFFUSE, 0, &str);
+            
+            bool skip = false;
+            for(unsigned int j = 0; j < texture_paths.size(); j++) {
+                if(std::strcmp(texture_paths[j].c_str(), str.C_Str()) == 0) {
+                    texture_ID = j;
+                    skip = true;
+                    break;
+                }
+            }
+            if(!skip) {
+                texture_ID = (cl_uint)texture_paths.size();
+                texture_paths.push_back(std::string(str.C_Str()));
+            }
+        } else if(texture_count == 0) {
+            processError("ERROR: MESH HAS NO TEXTURE APPLIED, USE A DIFFERENT MATERIAL");
+        } else if(texture_count > 1) {
+            processError("ERROR: MESH HAS MORE THAN ONE TEXTURE");
+        }
+    }
+    
+    return Mesh(vertex_anchor, index_anchor, face_count, texture_ID);
+}
+
+void SceneCreator::processError(const std::string& err) {
+    std::cerr << err << std::endl;
+    exit(-1);
 }

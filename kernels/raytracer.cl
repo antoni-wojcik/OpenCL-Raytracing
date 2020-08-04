@@ -62,15 +62,13 @@ typedef struct {
     uint vertex_anchor;
     uint index_anchor;
     uint face_count;
-    //uint texture_uv_anchor;
-    //uint texture_ID;
+    uint texture_ID;
 } Mesh;
 
 typedef struct {
     uint mesh_anchor;
     uint mesh_count;
     uint mat_ID;
-    uint texture_ID;
 } Model;
 
 typedef struct {
@@ -295,7 +293,7 @@ bool hitMeshOut(const Ray* r, __global const Scene* scene, __global const Model*
     for(uint i = 0; i < mesh->face_count; i++) {
         if(hitTriangle(r, scene, mesh, (3 * i), (3 * i + 1), (3 * i + 2), hpi)) {
             if(dot(hpi->normal, r->dir) < 0.0f) {
-                hpi->mat_ID = model->mat_ID;
+                hpi->texture_ID = mesh->texture_ID;
                 return true;
             }
         }
@@ -313,7 +311,7 @@ bool hitModel(const Ray* r, __global const Scene* scene, __global const Model* m
         if(hitMeshOut(r, scene, model, scene->mesh_buffer + model->mesh_anchor + i, &hpi_result) && hpi_result.t < hit_min) {
             hit_any = true;
             *hpi = hpi_result;
-            hpi->texture_ID = model->texture_ID;
+            hpi->mat_ID = model->mat_ID;
             hit_min = hpi_result.t;
         }
     }
