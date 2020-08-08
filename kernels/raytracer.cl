@@ -111,15 +111,15 @@ inline vec3 getVec(__global const float* buff, uint id) {
 }
 
 inline vec3 randomVec(__global const float* random_buffer, const Ray* r, uint s_seed) {
-    uint rand_val = (uint)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
-    uint seed = ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1)) * 3) % RANDOM_BUFFER_SIZE;
+    uint rand_val = (uint)fabs(dot(r->dir, (vec3)(123.9898, 348.233, 433.3314)) * 438.5453);
+    uint seed = (rand_val + (s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1) * 2504) * 3) % RANDOM_BUFFER_SIZE;
     
     return getVec(random_buffer, seed);
 }
 
 inline float random(__global const float* random_buffer, const Ray* r, uint s_seed) {
-    uint rand_val = (uint)(dot(r->dir, (vec3)(123.9898, 758.233, 433.3314)) * 44378.5453);
-    uint seed = RANDOM_BUFFER_SIZE * 3 + ((rand_val + s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1))) % RANDOM_BUFFER_SIZE;
+    uint rand_val = (uint)fabs(dot(r->dir, (vec3)(123.9898, 348.233, 433.3314)) * 438.5453);
+    uint seed = RANDOM_BUFFER_SIZE * 3 + (rand_val + (s_seed * 2683 + get_global_id(0) * 3931 + get_global_id(1))) % RANDOM_BUFFER_SIZE;
     
     return random_buffer[seed];
 }
