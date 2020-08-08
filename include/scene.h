@@ -35,6 +35,7 @@ struct Material {
     cl_float extra_data; // refractive index etc
     
     Material(MatType type, const cl_float3& color, cl_float extra_data) : type(type), color(color), extra_data(extra_data) {}
+    Material() {}
 };
 
 struct Sphere {
@@ -120,17 +121,15 @@ private:
     inline Mesh* getMeshes() { return &(meshes[0]); }
     inline Model* getModels() { return &(models[0]); }
     
-    inline size_t getMaterialSize() { return sizeof(Material) * materials.size(); }
-    inline size_t getSphereSize() { return sizeof(Sphere) * spheres.size(); }
-    inline size_t getPlaneSize() { return sizeof(Plane) * planes.size(); }
-    inline size_t getLensSize() { return sizeof(Lens) * lenses.size(); }
-    inline size_t getVertexSize() { return sizeof(cl_float3) * vertices.size(); }
-    inline size_t getTexUVSize() { return sizeof(cl_float2) * texture_uv.size(); }
-    inline size_t getIndexSize() { return sizeof(cl_uint) * indices.size(); }
-    inline size_t getMeshSize() { return sizeof(Mesh) * meshes.size(); }
-    inline size_t getModelSize() { return sizeof(Model) * models.size(); }
-
-    void processError(const std::string& err);
+    inline size_t getMaterialSize() const { return sizeof(Material) * materials.size(); }
+    inline size_t getSphereSize() const { return sizeof(Sphere) * spheres.size(); }
+    inline size_t getPlaneSize() const { return sizeof(Plane) * planes.size(); }
+    inline size_t getLensSize() const { return sizeof(Lens) * lenses.size(); }
+    inline size_t getVertexSize() const { return sizeof(cl_float3) * vertices.size(); }
+    inline size_t getTexUVSize() const { return sizeof(cl_float2) * texture_uv.size(); }
+    inline size_t getIndexSize() const { return sizeof(cl_uint) * indices.size(); }
+    inline size_t getMeshSize() const { return sizeof(Mesh) * meshes.size(); }
+    inline size_t getModelSize() const { return sizeof(Model) * models.size(); }
     
 public:
     void createKernel(cl::Program& program, const char* name);
@@ -147,8 +146,10 @@ public:
     
     void loadTextures(cl::Context& context, cl::Device& device);
     
-    inline const cl::Buffer& getBuffer() { return scene_buffer; }
-    inline const cl::Image2DArray& getTextures() { return textures; }
+    void loadScene(const std::string& path);
+    
+    inline cl::Buffer& getBuffer() { return scene_buffer; }
+    inline cl::Image2DArray& getTextures() { return textures; }
 };
 
 #endif /* scene_h */

@@ -6,17 +6,30 @@
 //  Copyright © 2020 Antoni Wójcik. All rights reserved.
 //
 
-#include <stdio.h>
-#include <cmath>
 #include "scene.h"
+#include <fstream>
+#include <sstream>
+#include <cmath>
+#include <regex>
 
 // include the STB library to read texture files
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include "gtc/matrix_transform.hpp"
+
 #define SIZE_EMPTY 1
 
-//TODO: HANDLE "COUNT = 0" CASES
+
+std::string getPath(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end);
+template <typename T> T getVec(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end);
+cl_float getFloat(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end);
+cl_uint getUInt(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end);
+
+void processError(const std::string& err) {
+    std::cerr << err << std::endl;
+    exit(-1);
+}
 
 struct ObjectCounter {
     cl_uint sphere_count;
@@ -281,7 +294,168 @@ Mesh SceneCreator::processMesh(aiMesh* mesh, const aiScene* scene, cl_uint mat_I
     return Mesh(vertex_anchor, index_anchor, face_count, texture_ID);
 }
 
-void SceneCreator::processError(const std::string& err) {
-    std::cerr << err << std::endl;
-    exit(-1);
+void SceneCreator::loadScene(const std::string& path) {
+    std::stringstream scene_data_stream;
+    
+    try {
+        std::ifstream scene_file;
+        scene_file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        scene_file.open(path);
+        
+        std::stringstream scene_data_stream;
+        
+        scene_data_stream << scene_file.rdbuf();
+        scene_file.close();
+        
+        std::string line, word;
+        size_t pos;
+        std::sregex_token_iterator iter;
+        const static std::sregex_token_iterator end;
+        const static std::regex regex_delim(",(?![^(]*\\))");
+        
+        enum LoadMode { l_none, l_materials, l_spheres, l_planes, l_lenses, l_models } lm = l_none;
+        MatType m_type;
+        glm::mat4 model(1.0f);
+        
+        while(std::getline(scene_data_stream, line)) {
+            pos = line.find('#');
+            if(pos != std::string::npos) line.erase(line.begin() + pos, line.end());
+            if(line.empty()) continue;
+            
+            pos = line.find(':');
+            if(pos != std::string::npos) {
+                word = line.substr(0, pos);
+                
+                if(word.compare("MATERIALS") == 0) {
+                    lm = l_materials;
+                    continue;
+                } else if(word.compare("SPHERES") == 0) {
+                    lm = l_spheres;
+                    continue;
+                } else if(word.compare("PLANES") == 0) {
+                    lm = l_planes;
+                    continue;
+                } else if(word.compare("LENSES") == 0) {
+                    lm = l_lenses;
+                    continue;
+                } else if(word.compare("MODELS") == 0) {
+                    lm = l_models;
+                    continue;
+                } else if(lm == l_models) {
+                    line = line.substr(pos + 1);
+                    iter = std::sregex_token_iterator(line.begin(), line.end(), regex_delim, -1);
+                    
+                    if(word.compare("translate") == 0)
+                        model = glm::translate(model, getVec<glm::vec3>(iter, end));
+                    else if(word.compare("rotate") == 0)
+                        model = glm::rotate(model, glm::radians(getFloat(iter, end)), getVec<glm::vec3>(iter, end));
+                    else if(word.compare("scale") == 0)
+                        model = glm::scale(model, getVec<glm::vec3>(iter, end));
+                    else if(word.compare("load") == 0) {
+                        loadModel(getPath(iter, end), getUInt(iter, end), model);
+                        model = glm::mat4(1.0f);
+                    }
+                } else {
+                    processError("ERROR: SCENE: OPERATION " + word + " DOES NOT EXIST");
+                }
+            } else {
+                iter = std::sregex_token_iterator(line.begin(), line.end(), regex_delim, -1);
+                
+                switch(lm) {
+                    case l_materials: {
+                        word = *iter;
+                        
+                        if(word.compare("reflective") == 0) m_type = t_reflective;
+                        else if(word.compare("refractive") == 0) m_type = t_refractive;
+                        else if(word.compare("diffuse") == 0) m_type = t_diffuse;
+                        else if(word.compare("dielectric") == 0) m_type = t_dielectric;
+                        else if(word.compare("light") == 0) m_type = t_light;
+                        else if(word.compare("textured") == 0) m_type = t_textured;
+                        else {
+                            m_type = t_light;
+                            processError("ERROR: SCENE: MATERIAL: " + word + " DOES NOT EXIST");
+                        }
+                        iter++;
+                        
+                        addMaterial(m_type, getVec<cl_float3>(iter, end), getFloat(iter, end));
+                        break;
+                    }
+                    case l_spheres: {
+                        addSphere(getVec<cl_float3>(iter, end), getFloat(iter, end), getUInt(iter, end));
+                        break;
+                    }
+                    case l_planes: {
+                        addPlane(getVec<cl_float3>(iter, end), getVec<cl_float3>(iter, end), getUInt(iter, end));
+                        break;
+                    }
+                    case l_lenses: {
+                        addLens(getVec<cl_float3>(iter, end), getVec<cl_float3>(iter, end), getFloat(iter, end), getFloat(iter, end), getFloat(iter, end), getUInt(iter, end));
+                        break;
+                    }
+                    default:
+                        processError("ERROR: SCENE: OPERATION NOT SPECIFIED");
+                }
+            }
+        }
+    } catch(std::ifstream::failure err) {
+        processError("ERROR: SCENE: NOT SUCCESFULLY READ: " + std::string(err.what()));
+    }
+}
+
+std::string getPath(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end) {
+    if(iter == end) processError("ERROR: SCENE: NOT ENOUGH PARAMETERS");
+    const static std::regex regex_path("\\s*\".*?\"\\s*");
+    std::string word = *iter;
+    if(!std::regex_match(word, regex_path)) processError("ERROR: SCENE: IMPROPER PATH: " + word);
+    
+    size_t pos_begin = word.find('\"'), pos_end = word.rfind('\"');
+    
+    iter++;
+    return word.substr(pos_begin + 1, pos_end - 2);
+}
+
+template <typename T>
+T getVec(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end) {
+    if(iter == end) processError("ERROR: SCENE: NOT ENOUGH PARAMETERS");
+    
+    std::string word = *iter, temp;
+    
+    const static std::regex regex_vec("\\s*(\\((?=(\\d|\\.|[-+]))([-+]?(\\d*)+(\\.\\d+)?)\\,\\s*(?=(\\d|\\.|[-+]))([-+]?(\\d*)+(\\.\\d+)?)\\,\\s*(?=(\\d|\\.|[-+]))([-+]?(\\d*)+(\\.\\d+)?)\\))\\s*");
+    if(!std::regex_match(word, regex_vec)) processError("ERROR: SCENE: IMPROPER VECTOR: " + word);
+    
+    word = word.substr(word.find('(') + 1);
+    
+    T vec;
+    
+    size_t pos = word.find(',');
+    vec.x = std::stof(word.substr(0, pos));
+    word = word.substr(pos + 1);
+    pos = word.find(',');
+    vec.y = std::stof(word.substr(0, pos));
+    word = word.substr(pos + 1);
+    pos = word.find(')');
+    vec.z = std::stof(word.substr(0, pos));
+    
+    iter++;
+    return vec;
+}
+
+cl_float getFloat(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end) {
+    if(iter == end) processError("ERROR: SCENE: NOT ENOUGH PARAMETERS");
+    const static std::regex regex_float("\\s*(?=(\\d|\\.|[-+]))([-+]?(\\d*)+(\\.\\d+)?)\\s*");
+    std::string word = *iter;
+    if(!std::regex_match(word, regex_float)) processError("ERROR: SCENE: IMPROPER FLOAT: " + word);
+    
+    iter++;
+    return (cl_float)std::stof(word);
+}
+
+cl_uint getUInt(std::sregex_token_iterator& iter, const std::sregex_token_iterator& end) {
+    if(iter == end) processError("ERROR: SCENE: NOT ENOUGH PARAMETERS");
+    const static std::regex regex_uint("\\s*\\d\\s*");
+    std::string word = *iter;
+    if(!std::regex_match(word, regex_uint)) processError("ERROR: SCENE: IMPROPER UNSIGNED INT: " + word);
+    
+    iter++;
+    return (cl_uint)std::stoul(word);
 }
